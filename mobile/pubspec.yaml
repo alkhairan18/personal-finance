@@ -1,0 +1,35 @@
+name: personal_finance
+description: "Aplikasi Keuangan Pribadi (Anzhel & Wina) - Swiss Ledger Edition"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_riverpod: ^2.6.1
+  drift: ^2.22.1
+  sqlite3_flutter_libs: ^0.5.28
+  sqlite3: ^2.6.0
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  flutter_secure_storage: ^9.2.2
+  dio: ^5.7.0
+  uuid: ^4.5.1
+  intl: ^0.20.1
+  google_fonts: ^6.2.1
+  phosphor_flutter: ^2.1.0
+  pdf: ^3.11.1
+  printing: ^5.13.4
+  crypto: ^3.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
