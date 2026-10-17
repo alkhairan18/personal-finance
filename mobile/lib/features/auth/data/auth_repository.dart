@@ -1,0 +1,240 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:personal_finance/core/database/app_database.dart';
+import 'package:personal_finance/core/database/database_key_manager.dart';
+import 'package:personal_finance/core/network/api_client.dart';
+import 'package:uuid/uuid.dart';
+
+class AuthSession {
+  final String userId;
+  final String username;
+  final String displayName;
+  final String accessToken;
+  final String deviceId;
+  final String serverUrl;
+
+  const AuthSession({
+    required this.userId,
+    required this.username,
+    required this.displayName,
+    required this.accessToken,
+    required this.deviceId,
+    required this.serverUrl,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'user_id': userId,
+        'username': username,
+        'display_name': displayName,
+        'access_token': accessToken,
+        'device_id': deviceId,
+        'server_url': serverUrl,
+      };
+
+  factory AuthSession.fromJson(Map<String, dynamic> json) => AuthSession(
+        userId: json['user_id'] as String,
+        username: json['username'] as String,
+        displayName: json['display_name'] as String,
+        accessToken: (json['access_token'] as String?) ?? '',
+        deviceId: (json['device_id'] as String?) ?? 'android-default-device',
+        serverUrl: (json['server_url'] as String?) ?? 'http://10.0.2.2:8000',
+      );
+}
+
+class LogoutSafetyCheck {
+  final bool hasPendingOperations;
+  final int pendingCount;
+
+  const LogoutSafetyCheck({
+    required this.hasPendingOperations,
+    required this.pendingCount,
+  });
+}
+
+class UnsyncedChangesException implements Exception {
+  final int pendingCount;
+  const UnsyncedChangesException(this.pendingCount);
+
+  @override
+  String toString() =>
+      'Terdapat $pendingCount perubahan lokal yang belum tersinkronisasi.';
+}
+
+class AuthRepository extends ChangeNotifier {
+  static const _sessionStorageKey = 'pf_active_auth_session_v1';
+
+  final DioApiClient _apiClient;
+  final FlutterSecureStorage _secureStorage;
+  final DatabaseKeyManager _keyManager;
+  final bool _inMemoryMode;
+
+  AuthSession? _currentSession;
+  AppDatabase? _activeDatabase;
+
+  AuthRepository({
+    DioApiClient? apiClient,
+    FlutterSecureStorage? secureStorage,
+    DatabaseKeyManager? keyManager,
+    bool inMemoryMode = false,
+  })  : _apiClient = apiClient ?? DioApiClient(),
+        _secureStorage = secureStorage ?? const FlutterSecureStorage(),
+        _keyManager = keyManager ?? const DatabaseKeyManager(),
+        _inMemoryMode = inMemoryMode;
+
+  factory AuthRepository.forTesting({required AppDatabase activeDatabase}) {
+    final repo = AuthRepository(inMemoryMode: true);
+    repo._activeDatabase = activeDatabase;
+    repo._currentSession = AuthSession(
+      userId: activeDatabase.userId,
+      username: 'anzhel',
+      displayName: 'Anzhel',
+      accessToken: 'test-token',
+      deviceId: 'test-device-id',
+      serverUrl: 'http://127.0.0.1:8000',
+    );
+    return repo;
+  }
+
+  AuthSession? get currentSession => _currentSession;
+  AppDatabase? get activeDatabase => _activeDatabase;
+  DioApiClient get apiClient => _apiClient;
+
+  Future<AuthSession?> restoreSession() async {
+    if (_inMemoryMode) return _currentSession;
+    try {
+      final raw = await _secureStorage.read(key: _sessionStorageKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final session = AuthSession.fromJson(decoded);
+      await _activateSession(session, persist: false);
+      return session;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<AuthSession> login({
+    required String username,
+    required String password,
+    String serverUrl = 'http://10.0.2.2:8000',
+    bool allowOfflineAccountBootstrap = true,
+  }) async {
+    final normalizedUsername = username.trim().toLowerCase();
+    if (normalizedUsername.isEmpty || password.isEmpty) {
+      throw const ApiValidationException('Username dan kata sandi wajib diisi.');
+    }
+
+    _apiClient.setBaseUrl(serverUrl);
+    final deviceId = 'android-$normalizedUsername-${const Uuid().v4().substring(0, 8)}';
+
+    AuthSession session;
+    try {
+      final data = await _apiClient.login(
+        username: normalizedUsername,
+        password: password,
+        deviceId: deviceId,
+        deviceName: 'Android (${normalizedUsername.toUpperCase()})',
+      );
+      final userMap = (data['user'] as Map<String, dynamic>?) ?? const {};
+      session = AuthSession(
+        userId: (userMap['id'] as String?) ?? 'user-$normalizedUsername',
+        username: (userMap['username'] as String?) ?? normalizedUsername,
+        displayName: (userMap['display_name'] as String?) ??
+            (normalizedUsername == 'wina' ? 'Wina' : 'Anzhel'),
+        accessToken: (data['access_token'] as String?) ?? '',
+        deviceId: deviceId,
+        serverUrl: serverUrl,
+      );
+    } on ApiNetworkException {
+      if (!allowOfflineAccountBootstrap) rethrow;
+      if (normalizedUsername != 'anzhel' && normalizedUsername != 'wina') {
+        throw const ApiValidationException(
+          'Hanya akun Anzhel atau Wina yang terdaftar pada sistem ini.',
+        );
+      }
+      if (password.length < 8) {
+        throw const ApiValidationException('Kata sandi minimal 8 karakter.');
+      }
+      final displayName = normalizedUsername == 'wina' ? 'Wina' : 'Anzhel';
+      final deterministicUserId = normalizedUsername == 'wina'
+          ? '22222222-2222-4222-8222-000000000002'
+          : '22222222-2222-4222-8222-000000000001';
+      session = AuthSession(
+        userId: deterministicUserId,
+        username: normalizedUsername,
+        displayName: displayName,
+        accessToken: '',
+        deviceId: deviceId,
+        serverUrl: serverUrl,
+      );
+    }
+
+    await _activateSession(session, persist: !_inMemoryMode);
+    return session;
+  }
+
+  Future<void> _activateSession(AuthSession session, {required bool persist}) async {
+    await _activeDatabase?.close();
+    _apiClient.setBaseUrl(session.serverUrl);
+    _apiClient.setAccessToken(session.accessToken);
+
+    if (_inMemoryMode) {
+      _activeDatabase = AppDatabase.inMemory(userId: session.userId);
+    } else {
+      await _keyManager.getOrCreateDatabaseKey(session.userId);
+      final dir = await getApplicationDocumentsDirectory();
+      _activeDatabase = AppDatabase.openFile(
+        userId: session.userId,
+        directoryPath: dir.path,
+      );
+      if (persist) {
+        await _secureStorage.write(
+          key: _sessionStorageKey,
+          value: jsonEncode(session.toJson()),
+        );
+      }
+    }
+    await _activeDatabase!.ensureDefaultCategoriesSeeded();
+    _currentSession = session;
+    notifyListeners();
+  }
+
+  Future<LogoutSafetyCheck> checkLogoutSafety() async {
+    final db = _activeDatabase;
+    if (db == null) {
+      return const LogoutSafetyCheck(hasPendingOperations: false, pendingCount: 0);
+    }
+    final count = await db.getPendingOutboxCount();
+    return LogoutSafetyCheck(
+      hasPendingOperations: count > 0,
+      pendingCount: count,
+    );
+  }
+
+  Future<void> logout({bool forceDiscardPending = false}) async {
+    final safety = await checkLogoutSafety();
+    if (safety.hasPendingOperations && !forceDiscardPending) {
+      throw UnsyncedChangesException(safety.pendingCount);
+    }
+
+    final session = _currentSession;
+    await _apiClient.logoutRemote();
+    _apiClient.setAccessToken(null);
+
+    if (_activeDatabase != null) {
+      await _activeDatabase!.closeAndDeleteFile();
+      _activeDatabase = null;
+    }
+
+    if (!_inMemoryMode && session != null) {
+      await _keyManager.clearDatabaseKey(session.userId);
+      await _secureStorage.delete(key: _sessionStorageKey);
+    }
+
+    _currentSession = null;
+    notifyListeners();
+  }
+}
