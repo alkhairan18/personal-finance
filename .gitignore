@@ -1,0 +1,12 @@
+﻿.superpowers/
+tools/
+server/vendor/
+server/.env
+server/storage/*.key
+server/database/database.sqlite
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+*.keystore
+*.jks
