@@ -78,11 +78,10 @@ class AuthRepository extends ChangeNotifier {
     DioApiClient? apiClient,
     FlutterSecureStorage? secureStorage,
     DatabaseKeyManager? keyManager,
-    bool inMemoryMode = false,
+    this._inMemoryMode = false,
   })  : _apiClient = apiClient ?? DioApiClient(),
         _secureStorage = secureStorage ?? const FlutterSecureStorage(),
-        _keyManager = keyManager ?? const DatabaseKeyManager(),
-        _inMemoryMode = inMemoryMode;
+        _keyManager = keyManager ?? const DatabaseKeyManager();
 
   factory AuthRepository.forTesting({required AppDatabase activeDatabase}) {
     final repo = AuthRepository(inMemoryMode: true);

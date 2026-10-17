@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:personal_finance/app/providers/app_providers.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 import 'package:personal_finance/features/dashboard/presentation/buku_kas_screen.dart';
+import 'package:personal_finance/features/debts/presentation/kewajiban_screen.dart';
+import 'package:personal_finance/features/reports/presentation/reports_and_more_screen.dart';
 import 'package:personal_finance/features/transactions/presentation/quick_add_transaction_sheet.dart';
+import 'package:personal_finance/features/wishlist/presentation/wishlist_screen.dart';
 
 class MainShellScreen extends ConsumerStatefulWidget {
   final Widget? kewajibanTab;
@@ -55,9 +58,9 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
 
     final tabs = <Widget>[
       const BukuKasScreen(),
-      widget.kewajibanTab ?? const SizedBox.shrink(),
-      widget.wishlistTab ?? const SizedBox.shrink(),
-      widget.laporanTab ?? const SizedBox.shrink(),
+      widget.kewajibanTab ?? const KewajibanScreen(),
+      widget.wishlistTab ?? const WishlistScreen(),
+      widget.laporanTab ?? const ReportsAndMoreScreen(),
     ];
 
     return Scaffold(

@@ -466,9 +466,9 @@ class AppDatabase extends ChangeNotifier {
 
   AppDatabase._({
     required this.userId,
-    required sql.Database rawDb,
+    required this._rawDb,
     this.dbFilePath,
-  }) : _rawDb = rawDb {
+  }) {
     _initializeSchema();
   }
 
