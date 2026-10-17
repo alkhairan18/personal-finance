@@ -480,15 +480,23 @@ class AppDatabase extends ChangeNotifier {
   factory AppDatabase.openFile({
     required String userId,
     required String directoryPath,
+    String? encryptionKey,
   }) {
     final sanitizedUser = userId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
     final filePath = p.join(directoryPath, 'finance_$sanitizedUser.db');
     final raw = sql.sqlite3.open(filePath);
-    return AppDatabase._(
+    final instance = AppDatabase._(
       userId: userId,
       rawDb: raw,
       dbFilePath: filePath,
     );
+    if (encryptionKey != null && encryptionKey.isNotEmpty) {
+      instance.execute(
+        'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
+        ['key_configured', 'true'],
+      );
+    }
+    return instance;
   }
 
   void _initializeSchema() {
@@ -696,87 +704,87 @@ class AppDatabase extends ChangeNotifier {
 
   static const List<Map<String, String>> defaultSystemCategories = [
     {
-      'id': '11111111-1111-4111-8111-000000000001',
+      'id': '00000000-0000-4000-8000-000000000001',
       'name': 'Makan & Minum',
       'kind': 'expense',
-      'icon_key': 'fork_knife',
+      'icon_key': 'fork-knife',
       'color_hex': '#0F766E',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000002',
+      'id': '00000000-0000-4000-8000-000000000002',
       'name': 'Transportasi',
       'kind': 'expense',
-      'icon_key': 'car_simple',
+      'icon_key': 'gas-pump',
       'color_hex': '#0F766E',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000003',
-      'name': 'Kebutuhan Rumah',
+      'id': '00000000-0000-4000-8000-000000000003',
+      'name': 'Belanja Harian',
       'kind': 'expense',
-      'icon_key': 'house_line',
+      'icon_key': 'shopping-bag',
       'color_hex': '#0F766E',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000004',
+      'id': '00000000-0000-4000-8000-000000000004',
       'name': 'Tagihan & Utilitas',
       'kind': 'expense',
       'icon_key': 'lightning',
       'color_hex': '#B45309',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000005',
+      'id': '00000000-0000-4000-8000-000000000005',
+      'name': 'Kesehatan',
+      'kind': 'expense',
+      'icon_key': 'first-aid-kit',
+      'color_hex': '#0F766E',
+    },
+    {
+      'id': '00000000-0000-4000-8000-000000000006',
+      'name': 'Hiburan',
+      'kind': 'expense',
+      'icon_key': 'film-slate',
+      'color_hex': '#0F766E',
+    },
+    {
+      'id': '00000000-0000-4000-8000-000000000007',
       'name': 'Cicilan & Kewajiban',
       'kind': 'expense',
-      'icon_key': 'calendar_check',
+      'icon_key': 'calendar-check',
       'color_hex': '#B45309',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000006',
-      'name': 'Kesehatan',
+      'id': '00000000-0000-4000-8000-000000000008',
+      'name': 'Pengeluaran Lainnya',
       'kind': 'expense',
-      'icon_key': 'first_aid_kit',
+      'icon_key': 'dots-three-circle',
       'color_hex': '#0F766E',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000007',
-      'name': 'Hiburan & Gaya Hidup',
-      'kind': 'expense',
-      'icon_key': 'film_slate',
-      'color_hex': '#0F766E',
-    },
-    {
-      'id': '11111111-1111-4111-8111-000000000008',
-      'name': 'Belanja',
-      'kind': 'expense',
-      'icon_key': 'shopping_bag',
-      'color_hex': '#0F766E',
-    },
-    {
-      'id': '11111111-1111-4111-8111-000000000009',
-      'name': 'Gaji',
+      'id': '00000000-0000-4000-8000-000000000009',
+      'name': 'Gaji & Penghasilan',
       'kind': 'income',
       'icon_key': 'wallet',
       'color_hex': '#0F766E',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000010',
-      'name': 'Bonus & THR',
+      'id': '00000000-0000-4000-8000-000000000010',
+      'name': 'Bonus & Komisi',
       'kind': 'income',
       'icon_key': 'coins',
       'color_hex': '#0F766E',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000011',
-      'name': 'Usaha & Freelance',
+      'id': '00000000-0000-4000-8000-000000000011',
+      'name': 'Penerimaan Piutang',
       'kind': 'income',
-      'icon_key': 'briefcase',
+      'icon_key': 'hand-coins',
       'color_hex': '#0F766E',
     },
     {
-      'id': '11111111-1111-4111-8111-000000000012',
-      'name': 'Penerimaan Lainnya',
+      'id': '00000000-0000-4000-8000-000000000012',
+      'name': 'Pemasukan Lainnya',
       'kind': 'income',
-      'icon_key': 'arrow_down_left',
+      'icon_key': 'plus-circle',
       'color_hex': '#0F766E',
     },
   ];
@@ -824,7 +832,11 @@ class AppDatabase extends ChangeNotifier {
       rows = select(
         '''
         SELECT * FROM local_transactions
-        WHERE user_id = ? AND status = 'active' AND substr(transaction_date, 1, 7) = ?
+        WHERE user_id = ?
+          AND status = 'active'
+          AND reversal_of_transaction_id IS NULL
+          AND source_type != 'reversal'
+          AND substr(transaction_date, 1, 7) = ?
         ORDER BY transaction_date DESC, created_at DESC
         ''',
         [userId, yearMonth],
@@ -833,7 +845,10 @@ class AppDatabase extends ChangeNotifier {
       rows = select(
         '''
         SELECT * FROM local_transactions
-        WHERE user_id = ? AND status = 'active'
+        WHERE user_id = ?
+          AND status = 'active'
+          AND reversal_of_transaction_id IS NULL
+          AND source_type != 'reversal'
         ORDER BY transaction_date DESC, created_at DESC
         ''',
         [userId],

@@ -18,8 +18,9 @@ class BackupFinanceDatabaseCommand extends Command
     {
         $tables = [
             'users',
+            'devices',
             'categories',
-            'transactions',
+            'financial_transactions',
             'debts',
             'debt_payments',
             'installment_plans',

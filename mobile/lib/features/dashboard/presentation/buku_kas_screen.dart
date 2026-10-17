@@ -326,7 +326,7 @@ class BukuKasScreen extends ConsumerWidget {
   }
 
   Future<_BukuKasViewData> _loadData(AppDatabase db, String yearMonth) async {
-    final allTxs = await db.getActiveTransactions();
+    final allTxs = await db.getActiveTransactions(yearMonth: yearMonth);
     final cats = await db.getActiveCategories();
     final debts = await db.getActiveDebts();
 

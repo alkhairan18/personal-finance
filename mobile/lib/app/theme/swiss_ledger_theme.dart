@@ -100,10 +100,12 @@ class CategoryIconMapper {
   const CategoryIconMapper._();
 
   static IconData fromKey(String iconKey) {
-    switch (iconKey) {
+    final normalized = iconKey.trim().toLowerCase().replaceAll('-', '_');
+    switch (normalized) {
       case 'fork_knife':
         return PhosphorIconsRegular.forkKnife;
       case 'car_simple':
+      case 'gas_pump':
         return PhosphorIconsRegular.carSimple;
       case 'house_line':
         return PhosphorIconsRegular.houseLine;
@@ -120,10 +122,12 @@ class CategoryIconMapper {
       case 'wallet':
         return PhosphorIconsRegular.wallet;
       case 'coins':
+      case 'hand_coins':
         return PhosphorIconsRegular.coins;
       case 'briefcase':
         return PhosphorIconsRegular.briefcase;
       case 'arrow_down_left':
+      case 'plus_circle':
         return PhosphorIconsRegular.arrowDownLeft;
       default:
         return PhosphorIconsRegular.receipt;

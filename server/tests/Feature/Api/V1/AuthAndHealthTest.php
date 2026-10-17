@@ -91,4 +91,20 @@ class AuthAndHealthTest extends TestCase
             ->assertStatus(401)
             ->assertJsonPath('error.code', 'UNAUTHENTICATED');
     }
+
+    public function test_backup_finance_database_command_creates_json_snapshot(): void
+    {
+        $outputPath = storage_path('app/backups/test_backup_snapshot.json');
+        @unlink($outputPath);
+
+        $this->artisan('finance:backup-db', [
+            '--output' => $outputPath,
+        ])->assertExitCode(0);
+
+        $this->assertFileExists($outputPath);
+        $decoded = json_decode((string) file_get_contents($outputPath), true);
+        $this->assertIsArray($decoded);
+        $this->assertArrayHasKey('financial_transactions', $decoded['tables']);
+        @unlink($outputPath);
+    }
 }

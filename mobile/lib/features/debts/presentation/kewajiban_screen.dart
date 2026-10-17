@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:personal_finance/app/providers/app_providers.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 import 'package:personal_finance/core/database/app_database.dart';
+import 'package:personal_finance/core/finance/installment_calculator.dart';
 import 'package:personal_finance/core/finance/obligation_status.dart';
 import 'package:personal_finance/core/money/rupiah_formatter.dart';
 
@@ -113,6 +114,84 @@ class _DebtsSubView extends ConsumerWidget {
 
   const _DebtsSubView({required this.db});
 
+  Future<void> _showCreateDebtDialog(BuildContext context, WidgetRef ref) async {
+    final counterpartyCtrl = TextEditingController();
+    final amountCtrl = TextEditingController();
+    final titleCtrl = TextEditingController();
+    var direction = 'payable';
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: const Text('Catat Hutang / Piutang'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: direction,
+                  items: const [
+                    DropdownMenuItem(value: 'payable', child: Text('Hutang')),
+                    DropdownMenuItem(
+                        value: 'receivable', child: Text('Piutang')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setModalState(() => direction = v);
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: counterpartyCtrl,
+                  decoration: const InputDecoration(labelText: 'Nama Pihak'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Nominal (Rp)'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(labelText: 'Keterangan'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final amount = RupiahFormatter.parseDigits(amountCtrl.text);
+                final name = counterpartyCtrl.text.trim();
+                if (amount <= 0 || name.isEmpty) return;
+                final repo = ref.read(debtRepositoryProvider);
+                if (repo == null) return;
+                final todayIso =
+                    DateTime.now().toIso8601String().substring(0, 10);
+                await repo.createDebt(
+                  direction: direction,
+                  counterpartyName: name,
+                  principalAmount: amount,
+                  startDate: todayIso,
+                  title: titleCtrl.text.trim().isEmpty
+                      ? null
+                      : titleCtrl.text.trim(),
+                );
+                if (ctx.mounted) Navigator.of(ctx).pop();
+              },
+              child: const Text('Simpan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return FutureBuilder<List<LocalDebt>>(
@@ -194,7 +273,20 @@ class _DebtsSubView extends ConsumerWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              key: const Key('add_debt_button'),
+              onPressed: () => _showCreateDebtDialog(context, ref),
+              icon: const Icon(PhosphorIconsRegular.plus, size: 15),
+              label: Text(
+                'Tambah Hutang / Piutang',
+                style: SwissLedgerTypography.sans(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
             if (debts.isEmpty)
               Container(
                 padding: const EdgeInsets.all(24),
@@ -229,6 +321,46 @@ class _DebtCard extends ConsumerWidget {
 
   const _DebtCard({required this.debt});
 
+  Future<void> _showPartialPayDialog(BuildContext context, WidgetRef ref) async {
+    final amountCtrl =
+        TextEditingController(text: debt.remainingAmount.toString());
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Bayar ${debt.counterpartyName}'),
+        content: TextField(
+          controller: amountCtrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Nominal Bayar (Rp)'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final amt = RupiahFormatter.parseDigits(amountCtrl.text);
+              if (amt <= 0 || amt > debt.remainingAmount) return;
+              final repo = ref.read(debtRepositoryProvider);
+              if (repo == null) return;
+              final todayIso =
+                  DateTime.now().toIso8601String().substring(0, 10);
+              await repo.recordPayment(
+                debtId: debt.id,
+                amount: amt,
+                paymentDate: todayIso,
+                notes: 'Pembayaran kewajiban',
+              );
+              if (ctx.mounted) Navigator.of(ctx).pop();
+            },
+            child: const Text('Simpan Pembayaran'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final derivedStatus = ObligationStatusCalculator.deriveFromIso(
@@ -249,11 +381,13 @@ class _DebtCard extends ConsumerWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                debt.counterpartyName,
-                style: SwissLedgerTypography.sans(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
+              Expanded(
+                child: Text(
+                  debt.counterpartyName,
+                  style: SwissLedgerTypography.sans(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
               Container(
@@ -312,20 +446,9 @@ class _DebtCard extends ConsumerWidget {
               ),
               if (debt.remainingAmount > 0)
                 OutlinedButton(
-                  onPressed: () async {
-                    final repo = ref.read(debtRepositoryProvider);
-                    if (repo == null) return;
-                    final todayIso =
-                        DateTime.now().toIso8601String().substring(0, 10);
-                    await repo.recordPayment(
-                      debtId: debt.id,
-                      amount: debt.remainingAmount,
-                      paymentDate: todayIso,
-                      notes: 'Pelunasan cepat',
-                    );
-                  },
+                  onPressed: () => _showPartialPayDialog(context, ref),
                   child: Text(
-                    'Lunasi',
+                    'Bayar / Cicil',
                     style: SwissLedgerTypography.sans(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -346,6 +469,98 @@ class _InstallmentsSubView extends ConsumerWidget {
 
   const _InstallmentsSubView({required this.db});
 
+  Future<void> _showCreatePlanDialog(BuildContext context, WidgetRef ref) async {
+    final titleCtrl = TextEditingController();
+    final totalCtrl = TextEditingController(text: '6000000');
+    final countCtrl = TextEditingController(text: '7');
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          final total = RupiahFormatter.parseDigits(totalCtrl.text);
+          final count = int.tryParse(countCtrl.text.trim()) ?? 0;
+          final preview = (total > 0 && count > 0)
+              ? InstallmentCalculator.generateSchedule(
+                  totalAmount: total,
+                  count: count,
+                  frequency: 'monthly',
+                  startDate: DateTime.now(),
+                )
+              : const <PlannedInstallmentTerm>[];
+
+          return AlertDialog(
+            title: const Text('Buat Rencana Cicilan'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: titleCtrl,
+                    decoration: const InputDecoration(labelText: 'Nama Cicilan'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: totalCtrl,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setModalState(() {}),
+                    decoration:
+                        const InputDecoration(labelText: 'Total Nominal (Rp)'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: countCtrl,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setModalState(() {}),
+                    decoration: const InputDecoration(
+                        labelText: 'Jumlah Termin (contoh: 7)'),
+                  ),
+                  if (preview.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      'Simulasi: Termin #1 ${RupiahFormatter.format(preview.first.plannedAmount)} | Termin #${preview.last.installmentNumber} ${RupiahFormatter.format(preview.last.plannedAmount)}',
+                      style: SwissLedgerTypography.monoTabular(
+                        fontSize: 11,
+                        color: SwissLedgerColors.accentTeal,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Batal'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  if (total <= 0 || count <= 0 || titleCtrl.text.trim().isEmpty) {
+                    return;
+                  }
+                  final repo = ref.read(installmentRepositoryProvider);
+                  if (repo == null) return;
+                  final todayIso =
+                      DateTime.now().toIso8601String().substring(0, 10);
+                  await repo.createPlanWithSchedule(
+                    title: titleCtrl.text.trim(),
+                    totalAmount: total,
+                    installmentCount: count,
+                    frequency: 'monthly',
+                    startDate: todayIso,
+                  );
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                },
+                child: const Text('Simpan Jadwal'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return FutureBuilder<List<_PlanWithTerms>>(
@@ -355,6 +570,19 @@ class _InstallmentsSubView extends ConsumerWidget {
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
           children: [
+            OutlinedButton.icon(
+              key: const Key('add_installment_plan_button'),
+              onPressed: () => _showCreatePlanDialog(context, ref),
+              icon: const Icon(PhosphorIconsRegular.plus, size: 15),
+              label: Text(
+                'Buat Rencana Cicilan Baru',
+                style: SwissLedgerTypography.sans(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
             if (items.isEmpty)
               Container(
                 padding: const EdgeInsets.all(24),
@@ -473,7 +701,6 @@ class _InstallmentPlanCard extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 10),
-          // Segmented progress bar across N terms (including 7-term schedule)
           Row(
             children: [
               for (var i = 0; i < item.terms.length; i++) ...[
@@ -544,6 +771,33 @@ class _InstallmentPlanCard extends ConsumerWidget {
                 ),
             ],
           ),
+          if (nextTerm != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton(
+                onPressed: () async {
+                  final repo = ref.read(installmentRepositoryProvider);
+                  if (repo == null) return;
+                  final todayIso =
+                      DateTime.now().toIso8601String().substring(0, 10);
+                  await repo.recordPayment(
+                    installmentId: nextTerm.id,
+                    amount: nextTerm.remainingAmount,
+                    paymentDate: todayIso,
+                  );
+                },
+                child: Text(
+                  'Bayar Termin #${nextTerm.installmentNumber}',
+                  style: SwissLedgerTypography.sans(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: SwissLedgerColors.accentTeal,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

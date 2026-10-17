@@ -91,6 +91,7 @@ void main() {
 
   test('reversing a transaction marks original reversed, creates compensating entry, and queues reverse_transaction', () async {
     final categories = await db.getActiveCategories(kind: 'expense');
+    expect(categories.first.id, startsWith('00000000-0000-4000-8000-'));
     final originalId = await txRepo.createTransaction(
       type: 'expense',
       amount: 120000,
@@ -113,6 +114,11 @@ void main() {
     expect(reversal.type, 'income');
     expect(reversal.amount, 120000);
     expect(reversal.reversalOfTransactionId, originalId);
+
+    final summaryAfterReversal = await txRepo.getMonthlySummary('2026-10');
+    expect(summaryAfterReversal.totalIncome, 0);
+    expect(summaryAfterReversal.totalExpense, 0);
+    expect(summaryAfterReversal.netAmount, 0);
 
     final outbox = await db.getPendingOutboxItems();
     expect(outbox.map((o) => o.operationType).toList(), ['create', 'reverse_transaction']);

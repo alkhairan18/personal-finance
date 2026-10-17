@@ -172,5 +172,65 @@ class DebtAndInstallmentServiceTest extends TestCase
 
         $this->assertSame(457142, $res['remaining_term_amount']);
         $this->assertSame('partial', $firstTerm->fresh()->status);
+
+        // Pay remaining terms and verify installment_plan SyncChange is emitted on completion
+        $service->recordPayment($user, [
+            'id' => (string) Str::uuid(),
+            'installment_id' => $firstTerm->id,
+            'amount' => 457142,
+            'paid_at' => '2026-08-18T09:00:00Z',
+        ], (string) Str::uuid());
+
+        foreach ($plan->installments->where('sequence_no', '>', 1) as $term) {
+            $service->recordPayment($user, [
+                'id' => (string) Str::uuid(),
+                'installment_id' => $term->id,
+                'amount' => $term->planned_amount,
+                'paid_at' => '2026-09-17T09:00:00Z',
+            ], (string) Str::uuid());
+        }
+
+        $this->assertSame('completed', $plan->fresh()->status);
+        $completedSyncChange = \App\Models\SyncChange::where('entity_type', 'installment_plan')
+            ->where('entity_id', $plan->id)
+            ->orderByDesc('sequence_id')
+            ->first();
+        $this->assertNotNull($completedSyncChange);
+        $this->assertSame('completed', $completedSyncChange->payload['status']);
+    }
+
+    public function test_debt_payment_rejects_foreign_user_category_id(): void
+    {
+        $anzhel = User::factory()->create(['username' => 'anzhel']);
+        $wina = User::factory()->create(['username' => 'wina']);
+        $winaCat = \App\Models\Category::create([
+            'id' => (string) Str::uuid(),
+            'user_id' => $wina->id,
+            'name' => 'Kategori Wina',
+            'type' => 'expense',
+            'icon_key' => 'receipt',
+            'color_token' => 'slate',
+            'is_system' => false,
+            'version' => 1,
+        ]);
+
+        $debt = Debt::create([
+            'id' => (string) Str::uuid(),
+            'user_id' => $anzhel->id,
+            'direction' => 'payable',
+            'counterparty' => 'Budi',
+            'principal_amount' => 500000,
+            'start_date' => '2026-10-01',
+            'status' => 'active',
+            'version' => 1,
+        ]);
+
+        $this->expectException(\App\Exceptions\DomainValidationException::class);
+        app(DebtService::class)->recordPayment($anzhel, [
+            'id' => (string) Str::uuid(),
+            'debt_id' => $debt->id,
+            'amount' => 100000,
+            'category_id' => $winaCat->id,
+        ], (string) Str::uuid());
     }
 }

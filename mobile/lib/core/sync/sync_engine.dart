@@ -47,19 +47,7 @@ class SyncEngine {
     final pending = await db.getPendingOutboxItems();
     for (var offset = 0; offset < pending.length; offset += 100) {
       final batch = pending.skip(offset).take(100).toList();
-      final operationsPayload = batch
-          .map(
-            (item) => <String, dynamic>{
-              'operation_id': item.operationId,
-              'entity_type': item.entityType,
-              'entity_id': item.entityId,
-              'operation': item.operationType,
-              'base_version': item.baseVersion,
-              'client_timestamp': item.createdAt,
-              'payload': item.payload,
-            },
-          )
-          .toList();
+      final operationsPayload = batch.map(_serializeOutboxForPush).toList();
 
       Map<String, dynamic> pushResponse;
       try {
@@ -101,7 +89,9 @@ class SyncEngine {
         );
       }
 
-      final rawResults = (pushResponse['results'] as List<dynamic>?) ?? const [];
+      final pushBody =
+          (pushResponse['data'] as Map<String, dynamic>?) ?? pushResponse;
+      final rawResults = (pushBody['results'] as List<dynamic>?) ?? const [];
       final byOpId = <String, SyncOutboxItem>{
         for (final item in batch) item.operationId: item,
       };
@@ -116,7 +106,8 @@ class SyncEngine {
 
           final status = raw['status'] as String? ?? 'applied';
           if (status == 'applied' || status == 'replayed') {
-            final newVersion = raw['new_version'] as int?;
+            final newVersion =
+                (raw['entity_version'] as int?) ?? (raw['new_version'] as int?);
             _markEntitySynced(
               entityType: outboxItem.entityType,
               entityId: outboxItem.entityId,
@@ -125,8 +116,10 @@ class SyncEngine {
             db.execute('DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
             pushedCount++;
           } else if (status == 'conflict') {
-            final serverState = (raw['conflict_server_state'] as Map<String, dynamic>?) ??
-                <String, dynamic>{};
+            final serverState =
+                (raw['server_state'] as Map<String, dynamic>?) ??
+                    (raw['conflict_server_state'] as Map<String, dynamic>?) ??
+                    <String, dynamic>{};
             await db.recordSyncConflict(
               id: _uuid.v4(),
               operationId: opId,
@@ -160,9 +153,11 @@ class SyncEngine {
         );
       }
 
-      final changes = (pullResponse['changes'] as List<dynamic>?) ?? const [];
-      final nextCursor = (pullResponse['next_cursor'] ?? cursor ?? '0').toString();
-      final hasMore = (pullResponse['has_more'] as bool?) ?? false;
+      final pullBody =
+          (pullResponse['data'] as Map<String, dynamic>?) ?? pullResponse;
+      final changes = (pullBody['changes'] as List<dynamic>?) ?? const [];
+      final nextCursor = (pullBody['next_cursor'] ?? cursor ?? '0').toString();
+      final hasMore = (pullBody['has_more'] as bool?) ?? false;
 
       await db.transaction(() async {
         for (final rawChange in changes) {
@@ -191,6 +186,116 @@ class SyncEngine {
     );
   }
 
+  Map<String, dynamic> _serializeOutboxForPush(SyncOutboxItem item) {
+    var serverEntityType = item.entityType;
+    var serverEntityId = item.entityId;
+    var serverAction = item.operationType;
+    if (serverAction == 'create' || serverAction == 'update') {
+      serverAction = 'upsert';
+    }
+
+    final rawPayload = Map<String, dynamic>.from(item.payload);
+    Map<String, dynamic> normalizedPayload = rawPayload;
+
+    if (item.entityType == 'transaction' ||
+        item.entityType == 'financial_transaction') {
+      serverEntityType = 'financial_transaction';
+      if (item.operationType == 'reverse_transaction') {
+        serverAction = 'reverse_transaction';
+        normalizedPayload = {
+          ...rawPayload,
+          'transaction_id': item.entityId,
+          'reason': rawPayload['notes'] ?? rawPayload['reason'] ?? 'Koreksi',
+        };
+      } else {
+        final title = rawPayload['title'] as String?;
+        final notes = rawPayload['notes'] as String?;
+        final combinedNote =
+            (title != null && title.isNotEmpty && notes != null && notes.isNotEmpty)
+                ? '$title - $notes'
+                : (title ?? notes);
+        normalizedPayload = {
+          ...rawPayload,
+          'amount_minor': rawPayload['amount_minor'] ?? rawPayload['amount'],
+          'note': rawPayload['note'] ?? combinedNote,
+        };
+      }
+    } else if (item.entityType == 'debt' &&
+        item.operationType == 'record_debt_payment') {
+      serverEntityType = 'debt_payment';
+      serverEntityId = (rawPayload['payment_id'] as String?) ?? item.entityId;
+      serverAction = 'record_debt_payment';
+      normalizedPayload = {
+        ...rawPayload,
+        'id': serverEntityId,
+        'debt_id': item.entityId,
+        'transaction_id': rawPayload['linked_transaction_id'],
+        'amount': rawPayload['amount'],
+        'paid_at': rawPayload['payment_date'],
+        'category_id': rawPayload['category_id'],
+        'note': rawPayload['notes'],
+      };
+    } else if (item.entityType == 'debt') {
+      normalizedPayload = {
+        ...rawPayload,
+        'counterparty':
+            rawPayload['counterparty'] ?? rawPayload['counterparty_name'],
+        'note': rawPayload['note'] ?? rawPayload['title'] ?? rawPayload['notes'],
+      };
+    } else if (item.entityType == 'installment_plan') {
+      final rawTerms = (rawPayload['installments'] as List<dynamic>?) ?? const [];
+      final mappedTerms = rawTerms.map((t) {
+        if (t is! Map<String, dynamic>) return t;
+        return {
+          ...t,
+          'sequence_no': t['sequence_no'] ?? t['installment_number'],
+        };
+      }).toList();
+      normalizedPayload = {
+        ...rawPayload,
+        'note': rawPayload['note'] ?? rawPayload['notes'],
+        'installments': mappedTerms,
+      };
+    } else if (item.entityType == 'installment' &&
+        item.operationType == 'record_installment_payment') {
+      serverEntityType = 'installment_payment';
+      serverEntityId = (rawPayload['payment_id'] as String?) ?? item.entityId;
+      serverAction = 'record_installment_payment';
+      normalizedPayload = {
+        ...rawPayload,
+        'id': serverEntityId,
+        'installment_id': item.entityId,
+        'transaction_id': rawPayload['linked_transaction_id'],
+        'amount': rawPayload['amount'],
+        'paid_at': rawPayload['payment_date'],
+        'note': rawPayload['notes'],
+      };
+    } else if (item.entityType == 'wishlist') {
+      final rawStatus = (rawPayload['status'] as String?) ?? 'planned';
+      final validStatus = rawStatus == 'ready_to_buy' ? 'saving' : rawStatus;
+      normalizedPayload = {
+        ...rawPayload,
+        'title': rawPayload['title'] ?? rawPayload['item_name'],
+        'target_price':
+            rawPayload['target_price'] ?? rawPayload['target_amount'],
+        'note': rawPayload['note'] ?? rawPayload['notes'],
+        'status': validStatus,
+      };
+    }
+
+    return <String, dynamic>{
+      'operation_id': item.operationId,
+      'entity_type': serverEntityType,
+      'entity_id': serverEntityId,
+      'action': serverAction,
+      'operation': item.operationType,
+      'base_version': item.baseVersion,
+      'client_created_at': item.createdAt,
+      'client_timestamp': item.createdAt,
+      'payload': normalizedPayload,
+    };
+  }
+
   void _markEntitySynced({
     required String entityType,
     required String entityId,
@@ -216,6 +321,7 @@ class SyncEngine {
       case 'category':
         return 'local_categories';
       case 'transaction':
+      case 'financial_transaction':
         return 'local_transactions';
       case 'debt':
         return 'local_debts';
@@ -237,11 +343,15 @@ class SyncEngine {
   void _applyPulledChange(Map<String, dynamic> change) {
     final entityType = change['entity_type'] as String? ?? '';
     final entityId = change['entity_id'] as String? ?? '';
-    final changeType = change['change_type'] as String? ?? 'upsert';
-    final data = (change['data'] as Map<String, dynamic>?) ?? const {};
+    final changeType = (change['operation'] as String?) ??
+        (change['change_type'] as String?) ??
+        'upsert';
+    final data = (change['payload'] as Map<String, dynamic>?) ??
+        (change['data'] as Map<String, dynamic>?) ??
+        const {};
     final nowIso = DateTime.now().toUtc().toIso8601String();
 
-    if (changeType == 'tombstone') {
+    if (changeType == 'tombstone' || changeType == 'archive') {
       final table = _tableNameForEntity(entityType);
       if (table == null) return;
       if (entityType == 'category') {
@@ -270,18 +380,25 @@ class SyncEngine {
             data['id'] ?? entityId,
             data['user_id'],
             data['name'] ?? 'Kategori',
-            data['kind'] ?? 'expense',
+            data['kind'] ?? data['type'] ?? 'expense',
             data['icon_key'] ?? 'receipt',
             data['color_hex'] ?? '#0F766E',
             (data['is_system'] == true || data['is_system'] == 1) ? 1 : 0,
-            (data['is_archived'] == true || data['is_archived'] == 1) ? 1 : 0,
-            data['version'] ?? 1,
+            (data['is_archived'] == true ||
+                    data['is_archived'] == 1 ||
+                    data['archived_at'] != null)
+                ? 1
+                : 0,
+            data['version'] ?? change['entity_version'] ?? 1,
             data['created_at'] ?? nowIso,
             data['updated_at'] ?? nowIso,
           ],
         );
         break;
       case 'transaction':
+      case 'financial_transaction':
+        final rawStatus = (data['status'] as String?) ?? 'active';
+        final localStatus = rawStatus == 'posted' ? 'active' : rawStatus;
         db.execute(
           '''
           INSERT OR REPLACE INTO local_transactions (
@@ -295,13 +412,13 @@ class SyncEngine {
             data['category_id'],
             data['type'] ?? 'expense',
             data['source_type'] ?? 'manual',
-            data['amount'] ?? 1,
+            data['amount_minor'] ?? data['amount'] ?? 1,
             (data['transaction_date'] as String? ?? nowIso).substring(0, 10),
-            data['title'],
-            data['notes'],
-            data['status'] ?? 'active',
-            data['reversal_of_transaction_id'],
-            data['version'] ?? 1,
+            data['title'] ?? data['note'],
+            data['notes'] ?? data['note'],
+            localStatus,
+            data['reverses_transaction_id'] ?? data['reversal_of_transaction_id'],
+            data['version'] ?? change['entity_version'] ?? 1,
             data['created_at'] ?? nowIso,
             data['updated_at'] ?? nowIso,
           ],
@@ -320,17 +437,125 @@ class SyncEngine {
             data['id'] ?? entityId,
             data['user_id'] ?? db.userId,
             data['direction'] ?? 'payable',
-            data['counterparty_name'] ?? '-',
-            data['title'],
-            data['notes'],
+            data['counterparty'] ?? data['counterparty_name'] ?? '-',
+            data['title'] ?? data['note'],
+            data['notes'] ?? data['note'],
             data['principal_amount'] ?? 1,
-            data['remaining_amount'] ?? 0,
+            data['remaining_amount'] ?? data['principal_amount'] ?? 0,
             (data['start_date'] as String? ?? nowIso).substring(0, 10),
             data['due_date'] != null
                 ? (data['due_date'] as String).substring(0, 10)
                 : null,
             data['status'] ?? 'active',
-            data['version'] ?? 1,
+            data['version'] ?? change['entity_version'] ?? 1,
+            data['created_at'] ?? nowIso,
+            data['updated_at'] ?? nowIso,
+          ],
+        );
+        break;
+      case 'debt_payment':
+        final rawStatus = (data['status'] as String?) ?? 'active';
+        db.execute(
+          '''
+          INSERT OR REPLACE INTO local_debt_payments (
+            id, user_id, debt_id, linked_transaction_id, amount, payment_date,
+            notes, status, version, sync_status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+          ''',
+          [
+            data['id'] ?? entityId,
+            data['user_id'] ?? db.userId,
+            data['debt_id'] ?? '',
+            data['transaction_id'] ?? data['linked_transaction_id'],
+            data['amount'] ?? 1,
+            (data['paid_at'] as String? ??
+                    data['payment_date'] as String? ??
+                    nowIso)
+                .substring(0, 10),
+            data['note'] ?? data['notes'],
+            rawStatus == 'posted' ? 'active' : rawStatus,
+            data['version'] ?? change['entity_version'] ?? 1,
+            data['created_at'] ?? nowIso,
+            data['updated_at'] ?? nowIso,
+          ],
+        );
+        break;
+      case 'installment_plan':
+        db.execute(
+          '''
+          INSERT OR REPLACE INTO local_installment_plans (
+            id, user_id, title, vendor_name, category_id, total_amount,
+            installment_count, frequency, start_date, notes, status, version, sync_status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+          ''',
+          [
+            data['id'] ?? entityId,
+            data['user_id'] ?? db.userId,
+            data['title'] ?? 'Cicilan',
+            data['vendor_name'],
+            data['category_id'],
+            data['total_amount'] ?? 1,
+            data['installment_count'] ?? 1,
+            data['frequency'] ?? 'monthly',
+            (data['start_date'] as String? ?? nowIso).substring(0, 10),
+            data['note'] ?? data['notes'],
+            data['status'] ?? 'active',
+            data['version'] ?? change['entity_version'] ?? 1,
+            data['created_at'] ?? nowIso,
+            data['updated_at'] ?? nowIso,
+          ],
+        );
+        break;
+      case 'installment':
+        final planned = (data['planned_amount'] as int?) ?? 1;
+        final remaining = data['remaining_amount'] as int?;
+        final paid = (data['paid_amount'] as int?) ??
+            (remaining != null ? max(0, planned - remaining) : 0);
+        db.execute(
+          '''
+          INSERT OR REPLACE INTO local_installments (
+            id, user_id, plan_id, installment_number, due_date,
+            planned_amount, paid_amount, status, paid_at, version, sync_status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+          ''',
+          [
+            data['id'] ?? entityId,
+            data['user_id'] ?? db.userId,
+            data['plan_id'] ?? '',
+            data['sequence_no'] ?? data['installment_number'] ?? 1,
+            (data['due_date'] as String? ?? nowIso).substring(0, 10),
+            planned,
+            paid,
+            data['status'] ?? 'pending',
+            data['paid_at'],
+            data['version'] ?? change['entity_version'] ?? 1,
+            data['created_at'] ?? nowIso,
+            data['updated_at'] ?? nowIso,
+          ],
+        );
+        break;
+      case 'installment_payment':
+        final rawStatus = (data['status'] as String?) ?? 'active';
+        db.execute(
+          '''
+          INSERT OR REPLACE INTO local_installment_payments (
+            id, user_id, installment_id, linked_transaction_id, amount,
+            payment_date, notes, status, version, sync_status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+          ''',
+          [
+            data['id'] ?? entityId,
+            data['user_id'] ?? db.userId,
+            data['installment_id'] ?? '',
+            data['transaction_id'] ?? data['linked_transaction_id'],
+            data['amount'] ?? 1,
+            (data['paid_at'] as String? ??
+                    data['payment_date'] as String? ??
+                    nowIso)
+                .substring(0, 10),
+            data['note'] ?? data['notes'],
+            rawStatus == 'posted' ? 'active' : rawStatus,
+            data['version'] ?? change['entity_version'] ?? 1,
             data['created_at'] ?? nowIso,
             data['updated_at'] ?? nowIso,
           ],
@@ -347,18 +572,18 @@ class SyncEngine {
           [
             data['id'] ?? entityId,
             data['user_id'] ?? db.userId,
-            data['item_name'] ?? 'Item',
+            data['title'] ?? data['item_name'] ?? 'Item',
             data['category_id'],
-            data['target_amount'] ?? 1,
+            data['target_price'] ?? data['target_amount'] ?? 1,
             data['saved_amount'] ?? 0,
             data['priority'] ?? 'medium',
             data['target_date'] != null
                 ? (data['target_date'] as String).substring(0, 10)
                 : null,
             data['url_or_reference'],
-            data['notes'],
+            data['note'] ?? data['notes'],
             data['status'] ?? 'planned',
-            data['version'] ?? 1,
+            data['version'] ?? change['entity_version'] ?? 1,
             data['created_at'] ?? nowIso,
             data['updated_at'] ?? nowIso,
           ],

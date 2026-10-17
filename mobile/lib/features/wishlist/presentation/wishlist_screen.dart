@@ -8,6 +8,74 @@ import 'package:personal_finance/core/money/rupiah_formatter.dart';
 class WishlistScreen extends ConsumerWidget {
   const WishlistScreen({super.key});
 
+  Future<void> _showCreateWishlistDialog(
+      BuildContext context, WidgetRef ref) async {
+    final nameCtrl = TextEditingController();
+    final targetCtrl = TextEditingController();
+    var priority = 'medium';
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: const Text('Tambah Item Wishlist'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Nama Barang'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: targetCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration:
+                      const InputDecoration(labelText: 'Target Harga (Rp)'),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: priority,
+                  items: const [
+                    DropdownMenuItem(value: 'high', child: Text('Tinggi')),
+                    DropdownMenuItem(value: 'medium', child: Text('Sedang')),
+                    DropdownMenuItem(value: 'low', child: Text('Rendah')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setModalState(() => priority = v);
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final target = RupiahFormatter.parseDigits(targetCtrl.text);
+                final name = nameCtrl.text.trim();
+                if (target <= 0 || name.isEmpty) return;
+                final repo = ref.read(wishlistRepositoryProvider);
+                if (repo == null) return;
+                await repo.createWishlistItem(
+                  itemName: name,
+                  targetAmount: target,
+                  priority: priority,
+                );
+                if (ctx.mounted) Navigator.of(ctx).pop();
+              },
+              child: const Text('Simpan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final db = ref.watch(activeDatabaseProvider);
@@ -97,7 +165,20 @@ class WishlistScreen extends ConsumerWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              key: const Key('add_wishlist_button'),
+              onPressed: () => _showCreateWishlistDialog(context, ref),
+              icon: const Icon(PhosphorIconsRegular.plus, size: 15),
+              label: Text(
+                'Tambah Rencana Wishlist',
+                style: SwissLedgerTypography.sans(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
             if (items.isEmpty)
               Container(
                 padding: const EdgeInsets.all(24),
@@ -127,7 +208,7 @@ class WishlistScreen extends ConsumerWidget {
   }
 }
 
-class _WishlistCard extends StatelessWidget {
+class _WishlistCard extends ConsumerWidget {
   final LocalWishlist item;
 
   const _WishlistCard({required this.item});
@@ -157,7 +238,7 @@ class _WishlistCard extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final progressRatio = item.targetAmount > 0
         ? (item.savedAmount / item.targetAmount).clamp(0.0, 1.0)
         : 0.0;
@@ -241,6 +322,29 @@ class _WishlistCard extends StatelessWidget {
               ),
             ],
           ),
+          if (item.status != 'purchased') ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () async {
+                    final repo = ref.read(wishlistRepositoryProvider);
+                    if (repo == null) return;
+                    await repo.markPurchased(item.id);
+                  },
+                  child: Text(
+                    'Tandai Dibeli',
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: SwissLedgerColors.accentTeal,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

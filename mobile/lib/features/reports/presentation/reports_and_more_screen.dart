@@ -35,36 +35,54 @@ class ReportsAndMoreScreen extends ConsumerWidget {
     if (!context.mounted) return;
 
     if (!safety.hasPendingOperations) {
-      await authRepo.logout(forceDiscardPending: false);
+      await authRepo.logout(forceDiscardPending: false, deleteLocalCache: false);
       return;
     }
 
-    final shouldForce = await showDialog<bool>(
+    final choice = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Perubahan Belum Tersinkronisasi'),
         content: Text(
-          'Terdapat ${safety.pendingCount} entri di antrean lokal yang belum dikirim ke server. Keluar paksa akan menghapus data lokal yang belum tersinkron.',
+          'Terdapat ${safety.pendingCount} entri di antrean lokal yang belum dikirim ke server. Pilih tindakan sebelum keluar:',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
+            onPressed: () => Navigator.of(ctx).pop('cancel'),
             child: const Text('Batal'),
+          ),
+          OutlinedButton(
+            onPressed: () => Navigator.of(ctx).pop('keep_cache'),
+            child: const Text('Tetap Simpan Cache & Keluar'),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: SwissLedgerColors.dangerRed,
+              backgroundColor: SwissLedgerColors.accentTeal,
               foregroundColor: Colors.white,
             ),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Keluar Paksa'),
+            onPressed: () => Navigator.of(ctx).pop('sync_now'),
+            child: const Text('Sinkronkan Sekarang'),
           ),
         ],
       ),
     );
 
-    if (shouldForce == true) {
-      await authRepo.logout(forceDiscardPending: true);
+    if (choice == 'sync_now') {
+      final syncEngine = ref.read(syncEngineProvider);
+      if (syncEngine != null) {
+        final res = await syncEngine.synchronize();
+        if (res.success) {
+          await authRepo.logout(
+            forceDiscardPending: false,
+            deleteLocalCache: false,
+          );
+        }
+      }
+    } else if (choice == 'keep_cache') {
+      await authRepo.logout(
+        forceDiscardPending: true,
+        deleteLocalCache: false,
+      );
     }
   }
 
@@ -177,7 +195,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
             ),
 
             const SizedBox(height: 14),
-            // Due Reminders Section
+            // Due Reminders Section (Debts + Installment Terms)
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -189,7 +207,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'PENGINGAT JATUH TEMPO',
+                    'PENGINGAT JATUH TEMPO (HUTANG & CICILAN)',
                     style: SwissLedgerTypography.sans(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
@@ -198,7 +216,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  if (data.unpaidDebts.isEmpty)
+                  if (data.reminders.isEmpty)
                     Text(
                       'Tidak ada kewajiban yang mendekati jatuh tempo.',
                       style: SwissLedgerTypography.sans(
@@ -207,7 +225,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                       ),
                     )
                   else
-                    for (final d in data.unpaidDebts)
+                    for (final item in data.reminders)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Row(
@@ -215,7 +233,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                           children: [
                             Expanded(
                               child: Text(
-                                '${d.counterpartyName} (${ObligationStatusCalculator.deriveFromIso(remainingAmount: d.remainingAmount, dueDateIso: d.dueDate).label})',
+                                '${item.title} (${item.status.label})',
                                 style: SwissLedgerTypography.sans(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
@@ -223,7 +241,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                               ),
                             ),
                             Text(
-                              RupiahFormatter.format(d.remainingAmount),
+                              RupiahFormatter.format(item.amount),
                               style: SwissLedgerTypography.monoTabular(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w700,
@@ -246,13 +264,43 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: SwissLedgerColors.warningAmber),
                 ),
-                child: Text(
-                  'Terdapat ${data.conflicts.length} konflik sinkronisasi yang disimpan untuk ditinjau.',
-                  style: SwissLedgerTypography.sans(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: SwissLedgerColors.warningAmber,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Terdapat ${data.conflicts.length} konflik sinkronisasi.',
+                      style: SwissLedgerTypography.sans(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: SwissLedgerColors.warningAmber,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final c in data.conflicts)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${c.entityType} (${c.entityId.substring(0, 8)})',
+                              style: SwissLedgerTypography.monoTabular(
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              db.execute(
+                                'DELETE FROM sync_conflicts WHERE id = ?',
+                                [c.id],
+                              );
+                              db.notifyDataChanged();
+                            },
+                            child: const Text('Gunakan Server'),
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
               ),
             ],
@@ -283,20 +331,65 @@ class ReportsAndMoreScreen extends ConsumerWidget {
 
   Future<_ReportScreenData> _loadReportData(AppDatabase db) async {
     final debts = await db.getActiveDebts();
+    final plans = await db.getActiveInstallmentPlans();
     final conflicts = await db.getSyncConflicts();
+    final reminders = <_DueReminderItem>[];
+
+    for (final d in debts.where((d) => d.remainingAmount > 0)) {
+      reminders.add(
+        _DueReminderItem(
+          title: d.counterpartyName,
+          amount: d.remainingAmount,
+          status: ObligationStatusCalculator.deriveFromIso(
+            remainingAmount: d.remainingAmount,
+            dueDateIso: d.dueDate,
+          ),
+        ),
+      );
+    }
+
+    for (final p in plans) {
+      final terms = await db.getInstallmentsForPlan(p.id);
+      final nextUnpaid = terms.where((t) => t.remainingAmount > 0).firstOrNull;
+      if (nextUnpaid != null) {
+        reminders.add(
+          _DueReminderItem(
+            title: '${p.title} #${nextUnpaid.installmentNumber}',
+            amount: nextUnpaid.remainingAmount,
+            status: ObligationStatusCalculator.deriveFromIso(
+              remainingAmount: nextUnpaid.remainingAmount,
+              dueDateIso: nextUnpaid.dueDate,
+            ),
+          ),
+        );
+      }
+    }
+
     return _ReportScreenData(
-      unpaidDebts: debts.where((d) => d.remainingAmount > 0).toList(),
+      reminders: reminders,
       conflicts: conflicts,
     );
   }
 }
 
+class _DueReminderItem {
+  final String title;
+  final int amount;
+  final ObligationStatus status;
+
+  const _DueReminderItem({
+    required this.title,
+    required this.amount,
+    required this.status,
+  });
+}
+
 class _ReportScreenData {
-  final List<LocalDebt> unpaidDebts;
+  final List<_DueReminderItem> reminders;
   final List<SyncConflictEntry> conflicts;
 
   const _ReportScreenData({
-    required this.unpaidDebts,
+    required this.reminders,
     required this.conflicts,
   });
 }

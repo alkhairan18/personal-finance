@@ -133,13 +133,27 @@ class InstallmentService
                 ? CarbonImmutable::parse($data['paid_at'])->utc()
                 : CarbonImmutable::now('UTC');
 
+            $categoryId = $data['category_id'] ?? null;
+            if ($categoryId !== null) {
+                $validCategory = \App\Models\Category::where('id', $categoryId)
+                    ->where(function ($q) use ($user) {
+                        $q->whereNull('user_id')->orWhere('user_id', $user->id);
+                    })
+                    ->exists();
+                if (! $validCategory) {
+                    throw new DomainValidationException('Kategori transaksi tidak valid.', [
+                        'category_id' => ['Kategori transaksi tidak valid.'],
+                    ]);
+                }
+            }
+
             $tx = FinancialTransaction::create([
                 'id' => $transactionId,
                 'user_id' => $user->id,
                 'type' => 'expense',
                 'amount_minor' => $amount,
                 'transaction_date' => $paidAt->format('Y-m-d'),
-                'category_id' => $data['category_id'] ?? null,
+                'category_id' => $categoryId,
                 'payment_method' => $data['payment_method'] ?? null,
                 'note' => $data['note'] ?? ("Cicilan {$plan->title} (Termin {$installment->sequence_no}/{$plan->installment_count})"),
                 'source_type' => 'installment_payment',
@@ -166,12 +180,14 @@ class InstallmentService
                 'version' => (int) $installment->version + 1,
             ]);
 
+            $planUpdated = false;
             $allTermsPaid = $plan->installments()->get()->every(fn (Installment $t) => $t->remainingAmount() === 0);
             if ($allTermsPaid && $plan->status === 'active') {
                 $plan->update([
                     'status' => 'completed',
                     'version' => (int) $plan->version + 1,
                 ]);
+                $planUpdated = true;
             }
 
             AuditLog::create([
@@ -217,6 +233,18 @@ class InstallmentService
                 'payload' => $this->serializeInstallment($installment->fresh()),
                 'created_at' => now(),
             ]);
+
+            if ($planUpdated) {
+                SyncChange::create([
+                    'user_id' => $user->id,
+                    'entity_type' => 'installment_plan',
+                    'entity_id' => $plan->id,
+                    'entity_version' => (int) $plan->version,
+                    'operation' => 'upsert',
+                    'payload' => $this->serializePlan($plan->fresh()),
+                    'created_at' => now(),
+                ]);
+            }
 
             return [
                 'payment_id' => $payment->id,
@@ -272,11 +300,13 @@ class InstallmentService
             ]);
 
             $plan = $installment->plan()->lockForUpdate()->firstOrFail();
+            $planUpdated = false;
             if ($plan->status === 'completed' && $remainingTermAfter > 0) {
                 $plan->update([
                     'status' => 'active',
                     'version' => (int) $plan->version + 1,
                 ]);
+                $planUpdated = true;
             }
 
             SyncChange::create([
@@ -298,6 +328,18 @@ class InstallmentService
                 'payload' => $this->serializeInstallment($installment->fresh()),
                 'created_at' => now(),
             ]);
+
+            if ($planUpdated) {
+                SyncChange::create([
+                    'user_id' => $user->id,
+                    'entity_type' => 'installment_plan',
+                    'entity_id' => $plan->id,
+                    'entity_version' => (int) $plan->version,
+                    'operation' => 'upsert',
+                    'payload' => $this->serializePlan($plan->fresh()),
+                    'created_at' => now(),
+                ]);
+            }
 
             return [
                 'payment_id' => $payment->id,

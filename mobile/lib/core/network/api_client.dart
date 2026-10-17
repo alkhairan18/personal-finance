@@ -113,6 +113,7 @@ class DioApiClient implements SyncApiGateway {
       final response = await _dio.post<Map<String, dynamic>>(
         '/api/v1/sync/push',
         data: {
+          'device_id': clientDeviceId,
           'client_device_id': clientDeviceId,
           'operations': operations,
         },

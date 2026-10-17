@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
@@ -39,7 +40,8 @@ class AuthSession {
         username: json['username'] as String,
         displayName: json['display_name'] as String,
         accessToken: (json['access_token'] as String?) ?? '',
-        deviceId: (json['device_id'] as String?) ?? 'android-default-device',
+        deviceId: (json['device_id'] as String?) ??
+            '00000000-0000-4000-8000-000000000099',
         serverUrl: (json['server_url'] as String?) ?? 'http://10.0.2.2:8000',
       );
 }
@@ -91,7 +93,7 @@ class AuthRepository extends ChangeNotifier {
       username: 'anzhel',
       displayName: 'Anzhel',
       accessToken: 'test-token',
-      deviceId: 'test-device-id',
+      deviceId: '00000000-0000-4000-8000-000000000099',
       serverUrl: 'http://127.0.0.1:8000',
     );
     return repo;
@@ -100,6 +102,13 @@ class AuthRepository extends ChangeNotifier {
   AuthSession? get currentSession => _currentSession;
   AppDatabase? get activeDatabase => _activeDatabase;
   DioApiClient get apiClient => _apiClient;
+
+  String _passwordVerifierKey(String username) => 'pf_pwd_verifier_$username';
+
+  String _hashPasswordVerifier(String username, String password) {
+    final bytes = utf8.encode('$username::$password::pf_v1');
+    return sha256.convert(bytes).toString();
+  }
 
   Future<AuthSession?> restoreSession() async {
     if (_inMemoryMode) return _currentSession;
@@ -127,26 +136,38 @@ class AuthRepository extends ChangeNotifier {
     }
 
     _apiClient.setBaseUrl(serverUrl);
-    final deviceId = 'android-$normalizedUsername-${const Uuid().v4().substring(0, 8)}';
+    final deviceId = const Uuid().v4();
 
     AuthSession session;
     try {
-      final data = await _apiClient.login(
+      final rawResponse = await _apiClient.login(
         username: normalizedUsername,
         password: password,
         deviceId: deviceId,
         deviceName: 'Android (${normalizedUsername.toUpperCase()})',
       );
-      final userMap = (data['user'] as Map<String, dynamic>?) ?? const {};
+      final payload =
+          (rawResponse['data'] as Map<String, dynamic>?) ?? rawResponse;
+      final userMap = (payload['user'] as Map<String, dynamic>?) ?? const {};
+      final token = (payload['token'] as String?) ??
+          (payload['access_token'] as String?) ??
+          '';
       session = AuthSession(
         userId: (userMap['id'] as String?) ?? 'user-$normalizedUsername',
         username: (userMap['username'] as String?) ?? normalizedUsername,
-        displayName: (userMap['display_name'] as String?) ??
+        displayName: (userMap['name'] as String?) ??
+            (userMap['display_name'] as String?) ??
             (normalizedUsername == 'wina' ? 'Wina' : 'Anzhel'),
-        accessToken: (data['access_token'] as String?) ?? '',
+        accessToken: token,
         deviceId: deviceId,
         serverUrl: serverUrl,
       );
+      if (!_inMemoryMode) {
+        await _secureStorage.write(
+          key: _passwordVerifierKey(normalizedUsername),
+          value: _hashPasswordVerifier(normalizedUsername, password),
+        );
+      }
     } on ApiNetworkException {
       if (!allowOfflineAccountBootstrap) rethrow;
       if (normalizedUsername != 'anzhel' && normalizedUsername != 'wina') {
@@ -156,6 +177,21 @@ class AuthRepository extends ChangeNotifier {
       }
       if (password.length < 8) {
         throw const ApiValidationException('Kata sandi minimal 8 karakter.');
+      }
+      if (!_inMemoryMode) {
+        final storedVerifier =
+            await _secureStorage.read(key: _passwordVerifierKey(normalizedUsername));
+        final candidateVerifier =
+            _hashPasswordVerifier(normalizedUsername, password);
+        if (storedVerifier != null && storedVerifier != candidateVerifier) {
+          throw const ApiValidationException('Kata sandi tidak sesuai.');
+        }
+        if (storedVerifier == null) {
+          await _secureStorage.write(
+            key: _passwordVerifierKey(normalizedUsername),
+            value: candidateVerifier,
+          );
+        }
       }
       final displayName = normalizedUsername == 'wina' ? 'Wina' : 'Anzhel';
       final deterministicUserId = normalizedUsername == 'wina'
@@ -183,11 +219,12 @@ class AuthRepository extends ChangeNotifier {
     if (_inMemoryMode) {
       _activeDatabase = AppDatabase.inMemory(userId: session.userId);
     } else {
-      await _keyManager.getOrCreateDatabaseKey(session.userId);
+      final dbKey = await _keyManager.getOrCreateDatabaseKey(session.userId);
       final dir = await getApplicationDocumentsDirectory();
       _activeDatabase = AppDatabase.openFile(
         userId: session.userId,
         directoryPath: dir.path,
+        encryptionKey: dbKey,
       );
       if (persist) {
         await _secureStorage.write(
@@ -213,7 +250,10 @@ class AuthRepository extends ChangeNotifier {
     );
   }
 
-  Future<void> logout({bool forceDiscardPending = false}) async {
+  Future<void> logout({
+    bool forceDiscardPending = false,
+    bool deleteLocalCache = false,
+  }) async {
     final safety = await checkLogoutSafety();
     if (safety.hasPendingOperations && !forceDiscardPending) {
       throw UnsyncedChangesException(safety.pendingCount);
@@ -224,12 +264,18 @@ class AuthRepository extends ChangeNotifier {
     _apiClient.setAccessToken(null);
 
     if (_activeDatabase != null) {
-      await _activeDatabase!.closeAndDeleteFile();
+      if (deleteLocalCache) {
+        await _activeDatabase!.closeAndDeleteFile();
+      } else {
+        await _activeDatabase!.close();
+      }
       _activeDatabase = null;
     }
 
     if (!_inMemoryMode && session != null) {
-      await _keyManager.clearDatabaseKey(session.userId);
+      if (deleteLocalCache) {
+        await _keyManager.clearDatabaseKey(session.userId);
+      }
       await _secureStorage.delete(key: _sessionStorageKey);
     }
 

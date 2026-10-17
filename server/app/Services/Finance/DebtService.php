@@ -61,9 +61,19 @@ class DebtService
                 : CarbonImmutable::now('UTC');
 
             $txType = $debt->direction === 'payable' ? 'expense' : 'income';
-            $defaultCategoryId = $debt->direction === 'payable'
-                ? '00000000-0000-4000-8000-000000000007' // Cicilan & Kewajiban
-                : '00000000-0000-4000-8000-000000000011'; // Penerimaan Piutang
+            $categoryId = $data['category_id'] ?? null;
+            if ($categoryId !== null) {
+                $validCategory = \App\Models\Category::where('id', $categoryId)
+                    ->where(function ($q) use ($user) {
+                        $q->whereNull('user_id')->orWhere('user_id', $user->id);
+                    })
+                    ->exists();
+                if (! $validCategory) {
+                    throw new DomainValidationException('Kategori transaksi tidak valid.', [
+                        'category_id' => ['Kategori transaksi tidak valid.'],
+                    ]);
+                }
+            }
 
             $tx = FinancialTransaction::create([
                 'id' => $transactionId,
@@ -71,7 +81,7 @@ class DebtService
                 'type' => $txType,
                 'amount_minor' => $amount,
                 'transaction_date' => $paidAt->format('Y-m-d'),
-                'category_id' => $data['category_id'] ?? null,
+                'category_id' => $categoryId,
                 'payment_method' => $data['payment_method'] ?? null,
                 'note' => $data['note'] ?? ("Pembayaran {$debt->counterparty}"),
                 'source_type' => 'debt_payment',

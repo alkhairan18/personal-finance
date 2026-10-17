@@ -160,61 +160,64 @@ void main() {
     api.onPull = (cursor) async {
       if (cursor == null || cursor == '0') {
         return {
-          'next_cursor': '10',
-          'has_more': true,
-          'changes': [
-            {
-              'change_id': 10,
-              'entity_type': 'transaction',
-              'entity_id': 'tx-remote-1',
-              'change_type': 'upsert',
-              'version': 1,
-              'changed_at': '2026-10-17T08:00:00Z',
-              'data': {
-                'id': 'tx-remote-1',
-                'user_id': 'user-anzhel-uuid',
-                'category_id': catId,
-                'type': 'expense',
-                'source_type': 'manual',
-                'amount': 90000,
-                'transaction_date': '2026-10-17',
-                'title': 'Belanja Sayur',
-                'notes': null,
-                'status': 'active',
-                'version': 1,
+          'data': {
+            'next_cursor': '10',
+            'has_more': true,
+            'changes': [
+              {
+                'sequence_id': 10,
+                'entity_type': 'financial_transaction',
+                'entity_id': 'tx-remote-1',
+                'operation': 'upsert',
+                'entity_version': 1,
                 'created_at': '2026-10-17T08:00:00Z',
-                'updated_at': '2026-10-17T08:00:00Z',
+                'payload': {
+                  'id': 'tx-remote-1',
+                  'user_id': 'user-anzhel-uuid',
+                  'category_id': catId,
+                  'type': 'expense',
+                  'source_type': 'manual',
+                  'amount_minor': 90000,
+                  'transaction_date': '2026-10-17',
+                  'note': 'Belanja Sayur',
+                  'status': 'posted',
+                  'version': 1,
+                  'created_at': '2026-10-17T08:00:00Z',
+                  'updated_at': '2026-10-17T08:00:00Z',
+                },
               },
-            },
-          ],
+            ],
+          },
         };
       }
       return {
-        'next_cursor': '11',
-        'has_more': false,
-        'changes': [
-          {
-            'change_id': 11,
-            'entity_type': 'wishlist',
-            'entity_id': 'wl-remote-1',
-            'change_type': 'upsert',
-            'version': 1,
-            'changed_at': '2026-10-17T08:05:00Z',
-            'data': {
-              'id': 'wl-remote-1',
-              'user_id': 'user-anzhel-uuid',
-              'item_name': 'Kursi Kerja',
-              'category_id': catId,
-              'target_amount': 1500000,
-              'saved_amount': 500000,
-              'priority': 'high',
-              'status': 'saving',
-              'version': 1,
+        'data': {
+          'next_cursor': '11',
+          'has_more': false,
+          'changes': [
+            {
+              'sequence_id': 11,
+              'entity_type': 'wishlist',
+              'entity_id': 'wl-remote-1',
+              'operation': 'upsert',
+              'entity_version': 1,
               'created_at': '2026-10-17T08:05:00Z',
-              'updated_at': '2026-10-17T08:05:00Z',
+              'payload': {
+                'id': 'wl-remote-1',
+                'user_id': 'user-anzhel-uuid',
+                'title': 'Kursi Kerja',
+                'category_id': catId,
+                'target_price': 1500000,
+                'saved_amount': 500000,
+                'priority': 'high',
+                'status': 'saving',
+                'version': 1,
+                'created_at': '2026-10-17T08:05:00Z',
+                'updated_at': '2026-10-17T08:05:00Z',
+              },
             },
-          },
-        ],
+          ],
+        },
       };
     };
 
