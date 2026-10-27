@@ -153,7 +153,7 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen>
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        session?.displayName ?? 'Anzhel',
+                        session?.displayName ?? 'Pengguna',
                         style: SwissLedgerTypography.sans(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,

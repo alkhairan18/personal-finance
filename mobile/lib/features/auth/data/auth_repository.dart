@@ -92,6 +92,7 @@ class AuthRepository extends ChangeNotifier {
   final FlutterSecureStorage _secureStorage;
   final DatabaseKeyManager _keyManager;
   final bool _inMemoryMode;
+  final bool _hasCustomApiClient;
 
   AuthSession? _currentSession;
   AppDatabase? _activeDatabase;
@@ -104,7 +105,8 @@ class AuthRepository extends ChangeNotifier {
     this._inMemoryMode = false,
   })  : _apiClient = apiClient ?? DioApiClient(),
         _secureStorage = secureStorage ?? const FlutterSecureStorage(),
-        _keyManager = keyManager ?? const DatabaseKeyManager();
+        _keyManager = keyManager ?? const DatabaseKeyManager(),
+        _hasCustomApiClient = apiClient != null;
 
   factory AuthRepository.forTesting({required AppDatabase activeDatabase}) {
     final repo = AuthRepository(inMemoryMode: true);
@@ -126,6 +128,7 @@ class AuthRepository extends ChangeNotifier {
 
   String _passwordVerifierKey(String username) => 'pf_pwd_verifier_$username';
   String _passwordSecretKey(String username) => 'pf_pwd_secret_$username';
+  String _displayNameKey(String username) => 'pf_display_name_$username';
 
   String _hashPasswordVerifier(String username, String password) {
     final bytes = utf8.encode('$username::$password::pf_v1');
@@ -133,9 +136,29 @@ class AuthRepository extends ChangeNotifier {
   }
 
   static String deterministicIdForUsername(String normalizedUsername) {
-    return normalizedUsername == 'wina'
-        ? '22222222-2222-4222-8222-000000000002'
-        : '22222222-2222-4222-8222-000000000001';
+    final clean = normalizedUsername.trim().toLowerCase();
+    if (clean == 'anzhel') {
+      return '22222222-2222-4222-8222-000000000001';
+    }
+    if (clean == 'wina') {
+      return '22222222-2222-4222-8222-000000000002';
+    }
+    final hex = sha256.convert(utf8.encode('pf-user-id-v1:$clean')).toString();
+    return '${hex.substring(0, 8)}-'
+        '${hex.substring(8, 12)}-4'
+        '${hex.substring(13, 16)}-8'
+        '${hex.substring(17, 20)}-'
+        '${hex.substring(20, 32)}';
+  }
+
+  static String defaultDisplayNameForUsername(String normalizedUsername) {
+    final clean = normalizedUsername.trim();
+    if (clean.isEmpty) return 'Pengguna';
+    final parts = clean.split(RegExp(r'[_\.\-\s]+'));
+    return parts
+        .where((p) => p.isNotEmpty)
+        .map((p) => '${p[0].toUpperCase()}${p.substring(1).toLowerCase()}')
+        .join(' ');
   }
 
   Future<AuthSession?> restoreSession() async {
@@ -160,7 +183,7 @@ class AuthRepository extends ChangeNotifier {
       _apiClient.setAccessToken(session.accessToken);
       return true;
     }
-    if (_inMemoryMode) return false;
+    if (_inMemoryMode && !_hasCustomApiClient) return false;
 
     final password = _cachedPasswordForOfflineSync ??
         await _secureStorage.read(key: _passwordSecretKey(session.username));
@@ -170,12 +193,28 @@ class AuthRepository extends ChangeNotifier {
 
     try {
       _apiClient.setBaseUrl(session.serverUrl);
-      final rawResponse = await _apiClient.login(
-        username: session.username,
-        password: password,
-        deviceId: session.deviceId,
-        deviceName: 'Android (${session.username.toUpperCase()})',
-      );
+      Map<String, dynamic> rawResponse;
+      try {
+        rawResponse = await _apiClient.login(
+          username: session.username,
+          password: password,
+          deviceId: session.deviceId,
+          deviceName: 'Android (${session.displayName})',
+        );
+      } on ApiValidationException catch (e) {
+        if (e.statusCode == 401) {
+          rawResponse = await _apiClient.register(
+            name: session.displayName,
+            username: session.username,
+            password: password,
+            deviceId: session.deviceId,
+            deviceName: 'Android (${session.displayName})',
+          );
+        } else {
+          rethrow;
+        }
+      }
+
       final payload =
           (rawResponse['data'] as Map<String, dynamic>?) ?? rawResponse;
       final token = (payload['token'] as String?) ??
@@ -186,15 +225,103 @@ class AuthRepository extends ChangeNotifier {
       final updated = session.copyWith(accessToken: token);
       _currentSession = updated;
       _apiClient.setAccessToken(token);
-      await _secureStorage.write(
-        key: _sessionStorageKey,
-        value: jsonEncode(updated.toJson()),
-      );
+      if (!_inMemoryMode) {
+        await _secureStorage.write(
+          key: _sessionStorageKey,
+          value: jsonEncode(updated.toJson()),
+        );
+      }
       notifyListeners();
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  Future<AuthSession> register({
+    required String displayName,
+    required String username,
+    required String password,
+    String? serverUrl,
+    bool allowOfflineAccountBootstrap = true,
+  }) async {
+    final trimmedName = displayName.trim();
+    final normalizedUsername = username.trim().toLowerCase();
+    if (trimmedName.isEmpty) {
+      throw const ApiValidationException('Nama lengkap/panggilan wajib diisi.');
+    }
+    if (normalizedUsername.length < 3 ||
+        !RegExp(r'^[a-z0-9_.-]+$').hasMatch(normalizedUsername)) {
+      throw const ApiValidationException(
+        'Username minimal 3 karakter (huruf, angka, titik, atau garis bawah).',
+      );
+    }
+    if (password.length < 8) {
+      throw const ApiValidationException('Kata sandi minimal 8 karakter.');
+    }
+
+    final effectiveServerUrl = DioApiClient.normalizeBaseUrl(
+      serverUrl ?? DioApiClient.defaultBaseUrl,
+    );
+    _apiClient.setBaseUrl(effectiveServerUrl);
+    final deviceId = const Uuid().v4();
+    _cachedPasswordForOfflineSync = password;
+
+    AuthSession session;
+    try {
+      if (_inMemoryMode && !_hasCustomApiClient) {
+        throw const ApiNetworkException('In-memory offline mode');
+      }
+      final rawResponse = await _apiClient.register(
+        name: trimmedName,
+        username: normalizedUsername,
+        password: password,
+        deviceId: deviceId,
+        deviceName: 'Android ($trimmedName)',
+      );
+      final payload =
+          (rawResponse['data'] as Map<String, dynamic>?) ?? rawResponse;
+      final userMap = (payload['user'] as Map<String, dynamic>?) ?? const {};
+      final token = (payload['token'] as String?) ??
+          (payload['access_token'] as String?) ??
+          '';
+      session = AuthSession(
+        userId: (userMap['id'] as String?) ??
+            deterministicIdForUsername(normalizedUsername),
+        username: (userMap['username'] as String?) ?? normalizedUsername,
+        displayName: (userMap['name'] as String?) ?? trimmedName,
+        accessToken: token,
+        deviceId: deviceId,
+        serverUrl: effectiveServerUrl,
+      );
+      if (!_inMemoryMode) {
+        await _persistLocalAccountCredentials(
+          username: normalizedUsername,
+          displayName: trimmedName,
+          password: password,
+        );
+      }
+    } on ApiNetworkException {
+      if (!allowOfflineAccountBootstrap) rethrow;
+      if (!_inMemoryMode) {
+        await _persistLocalAccountCredentials(
+          username: normalizedUsername,
+          displayName: trimmedName,
+          password: password,
+        );
+      }
+      session = AuthSession(
+        userId: deterministicIdForUsername(normalizedUsername),
+        username: normalizedUsername,
+        displayName: trimmedName,
+        accessToken: '',
+        deviceId: deviceId,
+        serverUrl: effectiveServerUrl,
+      );
+    }
+
+    await _activateSession(session, persist: !_inMemoryMode);
+    return session;
   }
 
   Future<AuthSession> login({
@@ -207,6 +334,9 @@ class AuthRepository extends ChangeNotifier {
     if (normalizedUsername.isEmpty || password.isEmpty) {
       throw const ApiValidationException('Username dan kata sandi wajib diisi.');
     }
+    if (normalizedUsername.length < 3) {
+      throw const ApiValidationException('Username minimal 3 karakter.');
+    }
 
     final effectiveServerUrl = DioApiClient.normalizeBaseUrl(
       serverUrl ?? DioApiClient.defaultBaseUrl,
@@ -217,6 +347,9 @@ class AuthRepository extends ChangeNotifier {
 
     AuthSession session;
     try {
+      if (_inMemoryMode && !_hasCustomApiClient) {
+        throw const ApiNetworkException('In-memory offline mode');
+      }
       final rawResponse = await _apiClient.login(
         username: normalizedUsername,
         password: password,
@@ -229,37 +362,31 @@ class AuthRepository extends ChangeNotifier {
       final token = (payload['token'] as String?) ??
           (payload['access_token'] as String?) ??
           '';
+      final resolvedDisplayName = (userMap['name'] as String?) ??
+          (userMap['display_name'] as String?) ??
+          defaultDisplayNameForUsername(normalizedUsername);
       session = AuthSession(
         userId: (userMap['id'] as String?) ??
             deterministicIdForUsername(normalizedUsername),
         username: (userMap['username'] as String?) ?? normalizedUsername,
-        displayName: (userMap['name'] as String?) ??
-            (userMap['display_name'] as String?) ??
-            (normalizedUsername == 'wina' ? 'Wina' : 'Anzhel'),
+        displayName: resolvedDisplayName,
         accessToken: token,
         deviceId: deviceId,
         serverUrl: effectiveServerUrl,
       );
       if (!_inMemoryMode) {
-        await _secureStorage.write(
-          key: _passwordVerifierKey(normalizedUsername),
-          value: _hashPasswordVerifier(normalizedUsername, password),
-        );
-        await _secureStorage.write(
-          key: _passwordSecretKey(normalizedUsername),
-          value: password,
+        await _persistLocalAccountCredentials(
+          username: normalizedUsername,
+          displayName: resolvedDisplayName,
+          password: password,
         );
       }
     } on ApiNetworkException {
       if (!allowOfflineAccountBootstrap) rethrow;
-      if (normalizedUsername != 'anzhel' && normalizedUsername != 'wina') {
-        throw const ApiValidationException(
-          'Hanya akun Anzhel atau Wina yang terdaftar pada sistem ini.',
-        );
-      }
       if (password.length < 8) {
         throw const ApiValidationException('Kata sandi minimal 8 karakter.');
       }
+      String? storedDisplayName;
       if (!_inMemoryMode) {
         final storedVerifier = await _secureStorage.read(
           key: _passwordVerifierKey(normalizedUsername),
@@ -269,18 +396,18 @@ class AuthRepository extends ChangeNotifier {
         if (storedVerifier != null && storedVerifier != candidateVerifier) {
           throw const ApiValidationException('Kata sandi tidak sesuai.');
         }
-        if (storedVerifier == null) {
-          await _secureStorage.write(
-            key: _passwordVerifierKey(normalizedUsername),
-            value: candidateVerifier,
-          );
-        }
-        await _secureStorage.write(
-          key: _passwordSecretKey(normalizedUsername),
-          value: password,
+        storedDisplayName = await _secureStorage.read(
+          key: _displayNameKey(normalizedUsername),
+        );
+        await _persistLocalAccountCredentials(
+          username: normalizedUsername,
+          displayName: storedDisplayName ??
+              defaultDisplayNameForUsername(normalizedUsername),
+          password: password,
         );
       }
-      final displayName = normalizedUsername == 'wina' ? 'Wina' : 'Anzhel';
+      final displayName = storedDisplayName ??
+          defaultDisplayNameForUsername(normalizedUsername);
       final deterministicUserId =
           deterministicIdForUsername(normalizedUsername);
       session = AuthSession(
@@ -295,6 +422,25 @@ class AuthRepository extends ChangeNotifier {
 
     await _activateSession(session, persist: !_inMemoryMode);
     return session;
+  }
+
+  Future<void> _persistLocalAccountCredentials({
+    required String username,
+    required String displayName,
+    required String password,
+  }) async {
+    await _secureStorage.write(
+      key: _passwordVerifierKey(username),
+      value: _hashPasswordVerifier(username, password),
+    );
+    await _secureStorage.write(
+      key: _passwordSecretKey(username),
+      value: password,
+    );
+    await _secureStorage.write(
+      key: _displayNameKey(username),
+      value: displayName,
+    );
   }
 
   Future<void> _activateSession(AuthSession session, {required bool persist}) async {

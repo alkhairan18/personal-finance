@@ -12,9 +12,11 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
+  final _displayNameController = TextEditingController();
   final _usernameController = TextEditingController(text: 'anzhel');
   final _passwordController = TextEditingController();
   late final TextEditingController _serverUrlController;
+  bool _isRegisterMode = false;
   bool _showServerSettings = false;
   bool _isSubmitting = false;
   String? _errorMessage;
@@ -28,23 +30,34 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   void dispose() {
+    _displayNameController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
     _serverUrlController.dispose();
     super.dispose();
   }
 
-  Future<void> _submitLogin() async {
+  Future<void> _submitAuth() async {
     setState(() {
       _isSubmitting = true;
       _errorMessage = null;
     });
     try {
-      await ref.read(authRepositoryProvider).login(
-            username: _usernameController.text,
-            password: _passwordController.text,
-            serverUrl: _serverUrlController.text,
-          );
+      final authRepo = ref.read(authRepositoryProvider);
+      if (_isRegisterMode) {
+        await authRepo.register(
+          displayName: _displayNameController.text,
+          username: _usernameController.text,
+          password: _passwordController.text,
+          serverUrl: _serverUrlController.text,
+        );
+      } else {
+        await authRepo.login(
+          username: _usernameController.text,
+          password: _passwordController.text,
+          serverUrl: _serverUrlController.text,
+        );
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -118,7 +131,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                'Masuk ke Akun Terisolasi',
+                                _isRegisterMode
+                                    ? 'Buat Akun Pengguna Baru'
+                                    : 'Masuk ke Akun Terisolasi',
                                 style: SwissLedgerTypography.sans(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w700,
@@ -130,45 +145,110 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 20),
-                    Text(
-                      'PILIH AKUN',
-                      style: SwissLedgerTypography.sans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: SwissLedgerColors.textMuted,
-                        letterSpacing: 0.6,
+                    const SizedBox(height: 18),
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: SwissLedgerColors.surfaceSubtle,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _ModeTabButton(
+                              key: const Key('auth_mode_login_tab'),
+                              label: 'Masuk Akun',
+                              selected: !_isRegisterMode,
+                              onTap: () {
+                                setState(() {
+                                  _isRegisterMode = false;
+                                  _errorMessage = null;
+                                });
+                              },
+                            ),
+                          ),
+                          Expanded(
+                            child: _ModeTabButton(
+                              key: const Key('auth_mode_register_tab'),
+                              label: 'Daftar Baru',
+                              selected: _isRegisterMode,
+                              onTap: () {
+                                setState(() {
+                                  _isRegisterMode = true;
+                                  _errorMessage = null;
+                                  if (_usernameController.text == 'anzhel' ||
+                                      _usernameController.text == 'wina') {
+                                    _usernameController.clear();
+                                  }
+                                });
+                              },
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _AccountSelectorButton(
-                            label: 'Anzhel',
-                            selected: activeUsername == 'anzhel',
-                            onTap: () {
-                              setState(() {
-                                _usernameController.text = 'anzhel';
-                              });
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _AccountSelectorButton(
-                            label: 'Wina',
-                            selected: activeUsername == 'wina',
-                            onTap: () {
-                              setState(() {
-                                _usernameController.text = 'wina';
-                              });
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
                     const SizedBox(height: 16),
+                    if (!_isRegisterMode) ...[
+                      Text(
+                        'AKUN CEPAT ATAU KETIK USERNAME',
+                        style: SwissLedgerTypography.sans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: SwissLedgerColors.textMuted,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _AccountSelectorButton(
+                              label: 'Anzhel',
+                              selected: activeUsername == 'anzhel',
+                              onTap: () {
+                                setState(() {
+                                  _usernameController.text = 'anzhel';
+                                });
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _AccountSelectorButton(
+                              label: 'Wina',
+                              selected: activeUsername == 'wina',
+                              onTap: () {
+                                setState(() {
+                                  _usernameController.text = 'wina';
+                                });
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    if (_isRegisterMode) ...[
+                      TextField(
+                        key: const Key('register_display_name_field'),
+                        controller: _displayNameController,
+                        style: SwissLedgerTypography.sans(fontSize: 14),
+                        decoration: InputDecoration(
+                          labelText: 'Nama Lengkap / Panggilan',
+                          hintText: 'Contoh: Budi Santoso',
+                          isDense: true,
+                          filled: true,
+                          fillColor: SwissLedgerColors.bgPrimary,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(
+                              color: SwissLedgerColors.borderHairline,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     TextField(
                       key: const Key('login_username_field'),
                       controller: _usernameController,
@@ -176,6 +256,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       style: SwissLedgerTypography.sans(fontSize: 14),
                       decoration: InputDecoration(
                         labelText: 'Username',
+                        hintText: 'Contoh: budi_santoso',
                         isDense: true,
                         filled: true,
                         fillColor: SwissLedgerColors.bgPrimary,
@@ -224,11 +305,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               color: SwissLedgerColors.textMuted,
                             ),
                             const SizedBox(width: 6),
-                            Text(
-                              'Pengaturan URL Server Sinkronisasi',
-                              style: SwissLedgerTypography.sans(
-                                fontSize: 12,
-                                color: SwissLedgerColors.textMuted,
+                            Expanded(
+                              child: Text(
+                                'Pengaturan URL Server Sinkronisasi',
+                                overflow: TextOverflow.ellipsis,
+                                style: SwissLedgerTypography.sans(
+                                  fontSize: 12,
+                                  color: SwissLedgerColors.textMuted,
+                                ),
                               ),
                             ),
                           ],
@@ -284,9 +368,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             borderRadius: BorderRadius.circular(10),
                           ),
                         ),
-                        onPressed: _isSubmitting ? null : _submitLogin,
+                        onPressed: _isSubmitting ? null : _submitAuth,
                         child: Text(
-                          _isSubmitting ? 'Memproses...' : 'Buka Buku Kas',
+                          _isSubmitting
+                              ? 'Memproses...'
+                              : (_isRegisterMode
+                                  ? 'Buat Akun & Buka Buku Kas'
+                                  : 'Buka Buku Kas'),
                           style: SwissLedgerTypography.sans(
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
@@ -299,6 +387,45 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModeTabButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ModeTabButton({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? SwissLedgerColors.surfaceElevated : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: SwissLedgerTypography.sans(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: selected
+                ? SwissLedgerColors.textPrimary
+                : SwissLedgerColors.textMuted,
           ),
         ),
       ),

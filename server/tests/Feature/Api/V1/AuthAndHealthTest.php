@@ -135,4 +135,34 @@ class AuthAndHealthTest extends TestCase
         $this->assertArrayHasKey('financial_transactions', $decoded['tables']);
         @unlink($outputPath);
     }
+
+    public function test_any_new_user_can_register_via_api_and_get_deterministic_uuid_and_sanctum_token(): void
+    {
+        $deviceId = (string) Str::uuid();
+        $res = $this->postJson('/api/v1/auth/register', [
+            'name' => 'Budi Santoso',
+            'username' => 'budi_santoso',
+            'password' => 'PasswordKuat123!',
+            'device_id' => $deviceId,
+            'device_name' => 'Xiaomi 14 Budi',
+        ])->assertCreated();
+
+        $token = $res->json('data.token');
+        $this->assertNotEmpty($token);
+        $this->assertSame('budi_santoso', $res->json('data.user.username'));
+        $this->assertSame('Budi Santoso', $res->json('data.user.name'));
+        $this->assertSame(User::deterministicIdForUsername('budi_santoso'), $res->json('data.user.id'));
+
+        $this->withToken($token)->getJson('/api/v1/auth/me')
+            ->assertOk()
+            ->assertJsonPath('data.user.username', 'budi_santoso');
+
+        // Duplicate username should return 422
+        $this->postJson('/api/v1/auth/register', [
+            'name' => 'Budi Lain',
+            'username' => 'budi_santoso',
+            'password' => 'PasswordKuat123!',
+            'device_id' => (string) Str::uuid(),
+        ])->assertStatus(422);
+    }
 }

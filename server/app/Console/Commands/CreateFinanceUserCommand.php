@@ -28,11 +28,6 @@ class CreateFinanceUserCommand extends Command
             return self::FAILURE;
         }
 
-        $deterministicIds = [
-            'anzhel' => '22222222-2222-4222-8222-000000000001',
-            'wina' => '22222222-2222-4222-8222-000000000002',
-        ];
-
         $existing = User::where('username', $username)->first();
         if ($existing) {
             $existing->update([
@@ -43,17 +38,14 @@ class CreateFinanceUserCommand extends Command
             ]);
             $user = $existing->fresh();
         } else {
-            $attributes = [
+            $user = User::create([
+                'id' => User::deterministicIdForUsername($username),
                 'username' => $username,
                 'name' => $name,
                 'email' => $email,
                 'password' => Hash::make($password),
                 'is_active' => true,
-            ];
-            if (isset($deterministicIds[$username])) {
-                $attributes['id'] = $deterministicIds[$username];
-            }
-            $user = User::create($attributes);
+            ]);
         }
 
         $this->info("Akun pengguna '{$user->username}' ({$user->id}) berhasil disimpan.");
