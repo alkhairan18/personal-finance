@@ -16,6 +16,75 @@ class BukuKasScreen extends ConsumerWidget {
     return '${shifted.year.toString().padLeft(4, '0')}-${shifted.month.toString().padLeft(2, '0')}';
   }
 
+  Future<void> _showEditTransactionDialog(
+    BuildContext context,
+    WidgetRef ref,
+    LocalTransaction tx,
+  ) async {
+    final titleCtrl = TextEditingController(text: tx.title ?? '');
+    final amountCtrl = TextEditingController(text: tx.amount.toString());
+    final dateCtrl = TextEditingController(text: tx.transactionDate);
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Ubah Transaksi'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              key: const Key('edit_tx_title_input'),
+              controller: titleCtrl,
+              decoration: const InputDecoration(labelText: 'Catatan / Judul'),
+            ),
+            TextField(
+              key: const Key('edit_tx_amount_input'),
+              controller: amountCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Nominal (Rp)'),
+            ),
+            TextField(
+              key: const Key('edit_tx_date_input'),
+              controller: dateCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Tanggal (YYYY-MM-DD)',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            key: const Key('save_edit_tx_button'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SwissLedgerColors.accentTeal,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              final repo = ref.read(transactionRepositoryProvider);
+              final amount = RupiahFormatter.parseDigits(amountCtrl.text);
+              final dateText = dateCtrl.text.trim();
+              if (repo == null || amount <= 0 || dateText.isEmpty) return;
+              await repo.updateTransaction(
+                transactionId: tx.id,
+                amount: amount,
+                transactionDate: dateText,
+                title: titleCtrl.text.trim().isEmpty
+                    ? null
+                    : titleCtrl.text.trim(),
+              );
+              if (ctx.mounted) Navigator.of(ctx).pop();
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _confirmAndReverseTransaction(
     BuildContext context,
     WidgetRef ref,
@@ -429,6 +498,13 @@ class BukuKasScreen extends ConsumerWidget {
                             ),
                           _LedgerTransactionRow(
                             tx: filteredTxs[i],
+                            onEdit: filteredTxs[i].sourceType == 'manual'
+                                ? () => _showEditTransactionDialog(
+                                    context,
+                                    ref,
+                                    filteredTxs[i],
+                                  )
+                                : null,
                             category: data.categoriesById[filteredTxs[i].categoryId],
                             onReverse: () => _confirmAndReverseTransaction(
                               context,
@@ -536,11 +612,13 @@ class _LedgerTransactionRow extends StatelessWidget {
   final LocalTransaction tx;
   final LocalCategory? category;
   final VoidCallback onReverse;
+  final VoidCallback? onEdit;
 
   const _LedgerTransactionRow({
     required this.tx,
     required this.category,
     required this.onReverse,
+    this.onEdit,
   });
 
   @override
@@ -605,6 +683,23 @@ class _LedgerTransactionRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 2),
+              InkWell(
+                key: Key('edit_tx_${tx.id}'),
+                onTap: onEdit,
+                child: onEdit != null
+                    ? Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Text(
+                          'Ubah',
+                          style: SwissLedgerTypography.sans(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: SwissLedgerColors.accentTeal,
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
               InkWell(
                 key: Key('reverse_tx_${tx.id}'),
                 onTap: onReverse,

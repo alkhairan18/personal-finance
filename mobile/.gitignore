@@ -48,3 +48,5 @@ app.*.map.json
 .widget_preview/
 
 sqlite3.dll
+/android/key.properties
+/android/app/*.jks

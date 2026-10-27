@@ -301,4 +301,76 @@ class SyncPushPullTest extends TestCase
         $pull = $this->withToken($token)->getJson('/api/v1/sync/pull')->assertOk();
         $this->assertSame(1500000, $pull->json('data.changes.0.payload.saved_amount'));
     }
+
+    public function test_manual_transaction_and_custom_category_can_be_updated_via_sync_push(): void
+    {
+        $anzhel = User::factory()->create([
+            'username' => 'anzhel',
+            'password' => bcrypt('SecretPass123!'),
+        ]);
+        [$token, $deviceId] = $this->loginUser($anzhel);
+
+        $catId = (string) Str::uuid();
+        $txId = (string) Str::uuid();
+
+        $createRes = $this->withToken($token)->postJson('/api/v1/sync/push', [
+            'device_id' => $deviceId,
+            'operations' => [
+                [
+                    'operation_id' => (string) Str::uuid(),
+                    'entity_type' => 'category',
+                    'entity_id' => $catId,
+                    'action' => 'upsert',
+                    'base_version' => null,
+                    'payload' => [
+                        'name' => 'Kopi & Matcha',
+                        'type' => 'expense',
+                        'icon_key' => 'fork_knife',
+                    ],
+                ],
+                [
+                    'operation_id' => (string) Str::uuid(),
+                    'entity_type' => 'financial_transaction',
+                    'entity_id' => $txId,
+                    'action' => 'upsert',
+                    'base_version' => null,
+                    'payload' => [
+                        'type' => 'expense',
+                        'amount_minor' => 35000,
+                        'transaction_date' => '2026-10-20',
+                        'category_id' => $catId,
+                        'note' => 'Kopi Pagi',
+                    ],
+                ],
+            ],
+        ])->assertOk();
+
+        $this->assertSame('applied', $createRes->json('data.results.0.status'));
+        $this->assertSame('applied', $createRes->json('data.results.1.status'));
+
+        $updateRes = $this->withToken($token)->postJson('/api/v1/sync/push', [
+            'device_id' => $deviceId,
+            'operations' => [
+                [
+                    'operation_id' => (string) Str::uuid(),
+                    'entity_type' => 'financial_transaction',
+                    'entity_id' => $txId,
+                    'action' => 'upsert',
+                    'base_version' => 1,
+                    'payload' => [
+                        'type' => 'expense',
+                        'amount_minor' => 45000,
+                        'transaction_date' => '2026-10-21',
+                        'category_id' => $catId,
+                        'note' => 'Kopi Pagi + Croissant',
+                    ],
+                ],
+            ],
+        ])->assertOk();
+
+        $this->assertSame('applied', $updateRes->json('data.results.0.status'));
+        $updatedTx = FinancialTransaction::findOrFail($txId);
+        $this->assertSame(45000, (int) $updatedTx->amount_minor);
+        $this->assertSame('Kopi Pagi + Croissant', $updatedTx->note);
+    }
 }
