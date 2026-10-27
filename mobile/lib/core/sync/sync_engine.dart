@@ -24,12 +24,14 @@ class SyncEngine {
   final AppDatabase db;
   final SyncApiGateway apiGateway;
   final String clientDeviceId;
+  final Future<bool> Function()? onEnsureAuth;
   final Uuid _uuid;
 
   SyncEngine({
     required this.db,
     required this.apiGateway,
     required this.clientDeviceId,
+    this.onEnsureAuth,
     Uuid? uuid,
   }) : _uuid = uuid ?? const Uuid();
 
@@ -40,6 +42,10 @@ class SyncEngine {
   }
 
   Future<SyncRunResult> synchronize() async {
+    if (onEnsureAuth != null) {
+      await onEnsureAuth!();
+    }
+
     var pushedCount = 0;
     var pulledCount = 0;
     var conflictsCount = 0;
@@ -128,6 +134,7 @@ class SyncEngine {
               localPayload: outboxItem.payload,
               serverPayload: serverState,
             );
+            db.execute('DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
             conflictsCount++;
           } else if (status == 'rejected') {
             db.execute('DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
@@ -186,6 +193,64 @@ class SyncEngine {
     );
   }
 
+  Future<void> resolveConflictUseServer(String conflictId) async {
+    final conflicts = await db.getSyncConflicts();
+    final conflict = conflicts.where((c) => c.id == conflictId).firstOrNull;
+    if (conflict == null) return;
+
+    await db.transaction(() async {
+      _applyPulledChange({
+        'entity_type': conflict.entityType,
+        'entity_id': conflict.entityId,
+        'operation': 'upsert',
+        'entity_version': conflict.serverPayload['version'] ?? 1,
+        'payload': conflict.serverPayload,
+      });
+      db.execute('DELETE FROM sync_conflicts WHERE id = ?', [conflictId]);
+    });
+  }
+
+  Future<void> resolveConflictUseLocal(String conflictId) async {
+    final conflicts = await db.getSyncConflicts();
+    final conflict = conflicts.where((c) => c.id == conflictId).firstOrNull;
+    if (conflict == null) return;
+
+    final serverVersion = (conflict.serverPayload['version'] as int?) ?? 1;
+    final mergedLocal = <String, dynamic>{
+      ...conflict.serverPayload,
+      ...conflict.localPayload,
+      if (conflict.localPayload['item_name'] != null)
+        'title': conflict.localPayload['item_name'],
+      if (conflict.localPayload['target_amount'] != null)
+        'target_price': conflict.localPayload['target_amount'],
+      if (conflict.localPayload['counterparty_name'] != null)
+        'counterparty': conflict.localPayload['counterparty_name'],
+      if (conflict.localPayload['amount'] != null)
+        'amount_minor': conflict.localPayload['amount'],
+      'id': conflict.entityId,
+      'version': serverVersion,
+    };
+
+    await db.transaction(() async {
+      _applyPulledChange({
+        'entity_type': conflict.entityType,
+        'entity_id': conflict.entityId,
+        'operation': 'upsert',
+        'entity_version': serverVersion,
+        'payload': mergedLocal,
+      });
+      db.enqueueOutbox(
+        operationId: _uuid.v4(),
+        entityType: conflict.entityType,
+        entityId: conflict.entityId,
+        operationType: 'update',
+        baseVersion: serverVersion,
+        payload: conflict.localPayload,
+      );
+      db.execute('DELETE FROM sync_conflicts WHERE id = ?', [conflictId]);
+    });
+  }
+
   Map<String, dynamic> _serializeOutboxForPush(SyncOutboxItem item) {
     var serverEntityType = item.entityType;
     var serverEntityId = item.entityId;
@@ -220,6 +285,23 @@ class SyncEngine {
           'note': rawPayload['note'] ?? combinedNote,
         };
       }
+    } else if (item.operationType == 'reverse_debt_payment') {
+      serverEntityType = 'debt_payment';
+      serverAction = 'reverse_debt_payment';
+      normalizedPayload = {
+        ...rawPayload,
+        'debt_payment_id': rawPayload['debt_payment_id'] ?? item.entityId,
+        'reason': rawPayload['reason'] ?? 'Koreksi pembayaran hutang',
+      };
+    } else if (item.operationType == 'reverse_installment_payment') {
+      serverEntityType = 'installment_payment';
+      serverAction = 'reverse_installment_payment';
+      normalizedPayload = {
+        ...rawPayload,
+        'installment_payment_id':
+            rawPayload['installment_payment_id'] ?? item.entityId,
+        'reason': rawPayload['reason'] ?? 'Koreksi pembayaran cicilan',
+      };
     } else if (item.entityType == 'debt' &&
         item.operationType == 'record_debt_payment') {
       serverEntityType = 'debt_payment';
@@ -278,6 +360,7 @@ class SyncEngine {
         'title': rawPayload['title'] ?? rawPayload['item_name'],
         'target_price':
             rawPayload['target_price'] ?? rawPayload['target_amount'],
+        'saved_amount': rawPayload['saved_amount'] ?? 0,
         'note': rawPayload['note'] ?? rawPayload['notes'],
         'status': validStatus,
       };

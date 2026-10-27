@@ -26,6 +26,24 @@ class AuthSession {
     required this.serverUrl,
   });
 
+  AuthSession copyWith({
+    String? userId,
+    String? username,
+    String? displayName,
+    String? accessToken,
+    String? deviceId,
+    String? serverUrl,
+  }) {
+    return AuthSession(
+      userId: userId ?? this.userId,
+      username: username ?? this.username,
+      displayName: displayName ?? this.displayName,
+      accessToken: accessToken ?? this.accessToken,
+      deviceId: deviceId ?? this.deviceId,
+      serverUrl: serverUrl ?? this.serverUrl,
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'user_id': userId,
         'username': username,
@@ -42,7 +60,9 @@ class AuthSession {
         accessToken: (json['access_token'] as String?) ?? '',
         deviceId: (json['device_id'] as String?) ??
             '00000000-0000-4000-8000-000000000099',
-        serverUrl: (json['server_url'] as String?) ?? 'http://10.0.2.2:8000',
+        serverUrl: DioApiClient.normalizeBaseUrl(
+          (json['server_url'] as String?) ?? DioApiClient.defaultBaseUrl,
+        ),
       );
 }
 
@@ -75,6 +95,7 @@ class AuthRepository extends ChangeNotifier {
 
   AuthSession? _currentSession;
   AppDatabase? _activeDatabase;
+  String? _cachedPasswordForOfflineSync;
 
   AuthRepository({
     DioApiClient? apiClient,
@@ -104,10 +125,17 @@ class AuthRepository extends ChangeNotifier {
   DioApiClient get apiClient => _apiClient;
 
   String _passwordVerifierKey(String username) => 'pf_pwd_verifier_$username';
+  String _passwordSecretKey(String username) => 'pf_pwd_secret_$username';
 
   String _hashPasswordVerifier(String username, String password) {
     final bytes = utf8.encode('$username::$password::pf_v1');
     return sha256.convert(bytes).toString();
+  }
+
+  static String deterministicIdForUsername(String normalizedUsername) {
+    return normalizedUsername == 'wina'
+        ? '22222222-2222-4222-8222-000000000002'
+        : '22222222-2222-4222-8222-000000000001';
   }
 
   Future<AuthSession?> restoreSession() async {
@@ -124,10 +152,55 @@ class AuthRepository extends ChangeNotifier {
     }
   }
 
+  Future<bool> ensureOnlineToken() async {
+    final session = _currentSession;
+    if (session == null) return false;
+    if (session.accessToken.isNotEmpty) {
+      _apiClient.setBaseUrl(session.serverUrl);
+      _apiClient.setAccessToken(session.accessToken);
+      return true;
+    }
+    if (_inMemoryMode) return false;
+
+    final password = _cachedPasswordForOfflineSync ??
+        await _secureStorage.read(key: _passwordSecretKey(session.username));
+    if (password == null || password.isEmpty) {
+      return false;
+    }
+
+    try {
+      _apiClient.setBaseUrl(session.serverUrl);
+      final rawResponse = await _apiClient.login(
+        username: session.username,
+        password: password,
+        deviceId: session.deviceId,
+        deviceName: 'Android (${session.username.toUpperCase()})',
+      );
+      final payload =
+          (rawResponse['data'] as Map<String, dynamic>?) ?? rawResponse;
+      final token = (payload['token'] as String?) ??
+          (payload['access_token'] as String?) ??
+          '';
+      if (token.isEmpty) return false;
+
+      final updated = session.copyWith(accessToken: token);
+      _currentSession = updated;
+      _apiClient.setAccessToken(token);
+      await _secureStorage.write(
+        key: _sessionStorageKey,
+        value: jsonEncode(updated.toJson()),
+      );
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<AuthSession> login({
     required String username,
     required String password,
-    String serverUrl = 'http://10.0.2.2:8000',
+    String? serverUrl,
     bool allowOfflineAccountBootstrap = true,
   }) async {
     final normalizedUsername = username.trim().toLowerCase();
@@ -135,8 +208,12 @@ class AuthRepository extends ChangeNotifier {
       throw const ApiValidationException('Username dan kata sandi wajib diisi.');
     }
 
-    _apiClient.setBaseUrl(serverUrl);
+    final effectiveServerUrl = DioApiClient.normalizeBaseUrl(
+      serverUrl ?? DioApiClient.defaultBaseUrl,
+    );
+    _apiClient.setBaseUrl(effectiveServerUrl);
     final deviceId = const Uuid().v4();
+    _cachedPasswordForOfflineSync = password;
 
     AuthSession session;
     try {
@@ -153,19 +230,24 @@ class AuthRepository extends ChangeNotifier {
           (payload['access_token'] as String?) ??
           '';
       session = AuthSession(
-        userId: (userMap['id'] as String?) ?? 'user-$normalizedUsername',
+        userId: (userMap['id'] as String?) ??
+            deterministicIdForUsername(normalizedUsername),
         username: (userMap['username'] as String?) ?? normalizedUsername,
         displayName: (userMap['name'] as String?) ??
             (userMap['display_name'] as String?) ??
             (normalizedUsername == 'wina' ? 'Wina' : 'Anzhel'),
         accessToken: token,
         deviceId: deviceId,
-        serverUrl: serverUrl,
+        serverUrl: effectiveServerUrl,
       );
       if (!_inMemoryMode) {
         await _secureStorage.write(
           key: _passwordVerifierKey(normalizedUsername),
           value: _hashPasswordVerifier(normalizedUsername, password),
+        );
+        await _secureStorage.write(
+          key: _passwordSecretKey(normalizedUsername),
+          value: password,
         );
       }
     } on ApiNetworkException {
@@ -179,8 +261,9 @@ class AuthRepository extends ChangeNotifier {
         throw const ApiValidationException('Kata sandi minimal 8 karakter.');
       }
       if (!_inMemoryMode) {
-        final storedVerifier =
-            await _secureStorage.read(key: _passwordVerifierKey(normalizedUsername));
+        final storedVerifier = await _secureStorage.read(
+          key: _passwordVerifierKey(normalizedUsername),
+        );
         final candidateVerifier =
             _hashPasswordVerifier(normalizedUsername, password);
         if (storedVerifier != null && storedVerifier != candidateVerifier) {
@@ -192,18 +275,21 @@ class AuthRepository extends ChangeNotifier {
             value: candidateVerifier,
           );
         }
+        await _secureStorage.write(
+          key: _passwordSecretKey(normalizedUsername),
+          value: password,
+        );
       }
       final displayName = normalizedUsername == 'wina' ? 'Wina' : 'Anzhel';
-      final deterministicUserId = normalizedUsername == 'wina'
-          ? '22222222-2222-4222-8222-000000000002'
-          : '22222222-2222-4222-8222-000000000001';
+      final deterministicUserId =
+          deterministicIdForUsername(normalizedUsername);
       session = AuthSession(
         userId: deterministicUserId,
         username: normalizedUsername,
         displayName: displayName,
         accessToken: '',
         deviceId: deviceId,
-        serverUrl: serverUrl,
+        serverUrl: effectiveServerUrl,
       );
     }
 
@@ -262,6 +348,7 @@ class AuthRepository extends ChangeNotifier {
     final session = _currentSession;
     await _apiClient.logoutRemote();
     _apiClient.setAccessToken(null);
+    _cachedPasswordForOfflineSync = null;
 
     if (_activeDatabase != null) {
       if (deleteLocalCache) {

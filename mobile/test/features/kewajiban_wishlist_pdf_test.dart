@@ -107,11 +107,32 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Meja Kerja Kayu'), findsOneWidget);
+
+      // Create an active wishlist item and add savings via "Tambah Tabungan" button
+      final savingItemId = await wishlistRepo.createWishlistItem(
+        itemName: 'Sepatu Lari',
+        targetAmount: 1500000,
+        savedAmount: 200000,
+        priority: 'medium',
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(Key('wishlist_add_savings_$savingItemId')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('wishlist_savings_amount_field')),
+        '500000',
+      );
+      await tester.tap(find.byKey(const Key('wishlist_savings_submit_button')));
+      await tester.pumpAndSettle();
+
+      final updatedWishlist = await db.getWishlistById(savingItemId);
+      expect(updatedWishlist!.savedAmount, 500000);
     },
   );
 
   test(
-    'PdfReportGenerator.generatePeriodReport produces valid %PDF- bytes offline and BackupExportService exports valid JSON',
+    'PdfReportGenerator.generatePeriodReport produces valid %PDF- bytes offline and BackupExportService exports and restores valid JSON',
     () async {
       final cats = await db.getActiveCategories(kind: 'expense');
       await txRepo.createTransaction(
@@ -145,6 +166,13 @@ void main() {
       expect(decoded['user_id'], 'user-anzhel-uuid');
       expect((decoded['transactions'] as List).length, 1);
       expect((decoded['debts'] as List).length, 1);
+
+      final restoredDb = AppDatabase.inMemory(userId: 'user-anzhel-uuid');
+      await restoredDb.ensureDefaultCategoriesSeeded();
+      await BackupExportService.restoreFromJsonString(restoredDb, backupJson);
+      expect((await restoredDb.getActiveTransactions()).length, 1);
+      expect((await restoredDb.getActiveDebts()).length, 1);
+      await restoredDb.close();
     },
   );
 }

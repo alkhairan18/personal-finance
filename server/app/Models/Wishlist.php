@@ -14,6 +14,7 @@ class Wishlist extends Model
         'user_id',
         'title',
         'target_price',
+        'saved_amount',
         'target_date',
         'priority',
         'category',
@@ -28,6 +29,7 @@ class Wishlist extends Model
     {
         return [
             'target_price' => 'integer',
+            'saved_amount' => 'integer',
             'target_date' => 'date:Y-m-d',
             'version' => 'integer',
             'archived_at' => 'datetime',

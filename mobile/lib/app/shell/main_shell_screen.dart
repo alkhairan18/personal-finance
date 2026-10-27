@@ -41,7 +41,31 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
     if (syncEngine == null) return;
     ref.read(isSyncingProvider.notifier).state = true;
     try {
-      await syncEngine.synchronize();
+      final result = await syncEngine.synchronize();
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger != null) {
+        if (result.success) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                'Sinkronisasi selesai (${result.pushedCount} terkirim, ${result.pulledCount} diterima)',
+              ),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        } else {
+          messenger.showSnackBar(
+            SnackBar(
+              backgroundColor: SwissLedgerColors.dangerRed,
+              content: Text(
+                'Sinkronisasi belum berhasil: ${result.errorMessage ?? 'Periksa koneksi server'}',
+              ),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
     } finally {
       if (mounted) {
         ref.read(isSyncingProvider.notifier).state = false;

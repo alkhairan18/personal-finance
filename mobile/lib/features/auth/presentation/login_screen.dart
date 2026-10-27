@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:personal_finance/app/providers/app_providers.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
+import 'package:personal_finance/core/network/api_client.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -13,10 +14,17 @@ class LoginScreen extends ConsumerStatefulWidget {
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _usernameController = TextEditingController(text: 'anzhel');
   final _passwordController = TextEditingController();
-  final _serverUrlController = TextEditingController(text: 'http://10.0.2.2:8000');
+  late final TextEditingController _serverUrlController;
   bool _showServerSettings = false;
   bool _isSubmitting = false;
   String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _serverUrlController =
+        TextEditingController(text: DioApiClient.defaultBaseUrl);
+  }
 
   @override
   void dispose() {
@@ -40,7 +48,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = e.toString().replaceFirst(RegExp(r'^.*Exception:\s*'), '');
+          _errorMessage =
+              e.toString().replaceFirst(RegExp(r'^.*Exception:\s*'), '');
         });
       }
     } finally {

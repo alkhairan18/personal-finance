@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:personal_finance/app/providers/app_providers.dart';
@@ -26,6 +29,73 @@ class ReportsAndMoreScreen extends ConsumerWidget {
     await Printing.sharePdf(
       bytes: bytes,
       filename: 'Laporan_Kas_${accountName}_$periodLabel.pdf',
+    );
+  }
+
+  Future<void> _exportBackupJson(
+    BuildContext context,
+    AppDatabase db,
+    String accountName,
+  ) async {
+    final jsonStr = await BackupExportService.generateBackupJsonString(db);
+    if (!context.mounted) return;
+    await Printing.sharePdf(
+      bytes: Uint8List.fromList(utf8.encode(jsonStr)),
+      filename: 'Cadangan_Kas_$accountName.json',
+    );
+  }
+
+  Future<void> _showRestoreBackupDialog(
+    BuildContext context,
+    AppDatabase db,
+  ) async {
+    final ctrl = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Pulihkan Cadangan JSON'),
+        content: TextField(
+          controller: ctrl,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: 'Tempel isi file JSON cadangan di sini...',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await BackupExportService.restoreFromJsonString(
+                  db,
+                  ctrl.text.trim(),
+                );
+                if (ctx.mounted) {
+                  Navigator.of(ctx).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Data cadangan JSON berhasil dipulihkan.'),
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: SwissLedgerColors.dangerRed,
+                      content: Text('Gagal memulihkan JSON: $e'),
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Pulihkan Sekarang'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -166,24 +236,33 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     key: const Key('export_backup_json_button'),
-                    onPressed: () async {
-                      final jsonStr =
-                          await BackupExportService.generateBackupJsonString(db);
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Snapshot JSON siap (${jsonStr.length} byte)',
-                          ),
-                        ),
-                      );
-                    },
+                    onPressed: () => _exportBackupJson(
+                      context,
+                      db,
+                      session?.displayName ?? 'Anzhel',
+                    ),
                     icon: const Icon(
                       PhosphorIconsRegular.downloadSimple,
                       size: 16,
                     ),
                     label: Text(
                       'Ekspor Cadangan Data (JSON)',
+                      style: SwissLedgerTypography.sans(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    key: const Key('restore_backup_json_button'),
+                    onPressed: () => _showRestoreBackupDialog(context, db),
+                    icon: const Icon(
+                      PhosphorIconsRegular.arrowsClockwise,
+                      size: 16,
+                    ),
+                    label: Text(
+                      'Pulihkan Cadangan Data (JSON)',
                       style: SwissLedgerTypography.sans(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -282,19 +361,27 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              '${c.entityType} (${c.entityId.substring(0, 8)})',
+                              '${c.entityType} (${c.entityId.length >= 8 ? c.entityId.substring(0, 8) : c.entityId})',
                               style: SwissLedgerTypography.monoTabular(
                                 fontSize: 11,
                               ),
                             ),
                           ),
                           TextButton(
-                            onPressed: () {
-                              db.execute(
-                                'DELETE FROM sync_conflicts WHERE id = ?',
-                                [c.id],
-                              );
-                              db.notifyDataChanged();
+                            onPressed: () async {
+                              final syncEngine = ref.read(syncEngineProvider);
+                              if (syncEngine != null) {
+                                await syncEngine.resolveConflictUseLocal(c.id);
+                              }
+                            },
+                            child: const Text('Gunakan Lokal'),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              final syncEngine = ref.read(syncEngineProvider);
+                              if (syncEngine != null) {
+                                await syncEngine.resolveConflictUseServer(c.id);
+                              }
                             },
                             child: const Text('Gunakan Server'),
                           ),

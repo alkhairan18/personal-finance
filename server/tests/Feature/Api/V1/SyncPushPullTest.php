@@ -268,4 +268,37 @@ class SyncPushPullTest extends TestCase
         $this->assertFalse($page2->json('data.has_more'));
         $this->assertSame('Item Anzhel 3', $page2->json('data.changes.0.payload.title'));
     }
+
+    public function test_wishlist_saved_amount_persists_through_push_and_pull(): void
+    {
+        $anzhel = User::factory()->create([
+            'username' => 'anzhel',
+            'password' => bcrypt('SecretPass123!'),
+        ]);
+        [$token, $deviceId] = $this->loginUser($anzhel);
+
+        $wishlistId = (string) Str::uuid();
+        $this->withToken($token)->postJson('/api/v1/sync/push', [
+            'device_id' => $deviceId,
+            'operations' => [
+                [
+                    'operation_id' => (string) Str::uuid(),
+                    'entity_type' => 'wishlist',
+                    'entity_id' => $wishlistId,
+                    'action' => 'upsert',
+                    'base_version' => null,
+                    'payload' => [
+                        'title' => 'Kamera Mirrorless',
+                        'target_price' => 3000000,
+                        'saved_amount' => 1500000,
+                        'priority' => 'high',
+                        'status' => 'saving',
+                    ],
+                ],
+            ],
+        ])->assertOk();
+
+        $pull = $this->withToken($token)->getJson('/api/v1/sync/pull')->assertOk();
+        $this->assertSame(1500000, $pull->json('data.changes.0.payload.saved_amount'));
+    }
 }

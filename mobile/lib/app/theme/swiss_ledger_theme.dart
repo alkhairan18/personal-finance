@@ -30,6 +30,8 @@ class PhosphorIconsRegular {
   static const IconData signOut = Icons.logout_outlined;
   static const IconData warningCircle = Icons.error_outline;
   static const IconData checkCircle = Icons.check_circle_outline;
+  static const IconData arrowsClockwise = Icons.sync_outlined;
+  static const IconData calendarBlank = Icons.calendar_today_outlined;
 }
 
 class SwissLedgerColors {

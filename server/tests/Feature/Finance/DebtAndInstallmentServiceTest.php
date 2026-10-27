@@ -27,7 +27,7 @@ class DebtAndInstallmentServiceTest extends TestCase
             'counterparty' => 'Budi Santoso',
             'principal_amount' => 1000000,
             'start_date' => '2026-10-01',
-            'due_date' => '2026-10-25',
+            'due_date' => now()->addDays(7)->toDateString(),
             'status' => 'active',
             'version' => 1,
         ]);
@@ -79,7 +79,7 @@ class DebtAndInstallmentServiceTest extends TestCase
             'counterparty' => 'Budi Santoso',
             'principal_amount' => 1000000,
             'start_date' => '2026-10-01',
-            'due_date' => '2026-10-25',
+            'due_date' => now()->addDays(7)->toDateString(),
             'status' => 'active',
             'version' => 1,
         ]);
@@ -117,7 +117,7 @@ class DebtAndInstallmentServiceTest extends TestCase
             'counterparty' => 'Budi Santoso',
             'principal_amount' => 1000000,
             'start_date' => '2026-10-01',
-            'due_date' => '2026-10-25',
+            'due_date' => now()->addDays(7)->toDateString(),
             'status' => 'active',
             'version' => 1,
         ]);

@@ -58,5 +58,6 @@ final syncEngineProvider = Provider<SyncEngine?>((ref) {
     db: db,
     apiGateway: authRepo.apiClient,
     clientDeviceId: session.deviceId,
+    onEnsureAuth: authRepo.ensureOnlineToken,
   );
 });

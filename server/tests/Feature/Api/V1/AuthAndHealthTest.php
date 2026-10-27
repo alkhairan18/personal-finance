@@ -27,9 +27,37 @@ class AuthAndHealthTest extends TestCase
             '--password' => 'SecretPass123!',
         ])->assertExitCode(0);
 
+        $this->artisan('finance:create-user', [
+            'username' => 'wina',
+            'name' => 'Wina',
+            '--password' => 'WinaSecret123!',
+        ])->assertExitCode(0);
+
         $user = User::where('username', 'anzhel')->firstOrFail();
+        $wina = User::where('username', 'wina')->firstOrFail();
+        $this->assertSame('22222222-2222-4222-8222-000000000001', $user->id);
+        $this->assertSame('22222222-2222-4222-8222-000000000002', $wina->id);
         $this->assertNotSame('SecretPass123!', $user->password);
         $this->assertTrue(password_verify('SecretPass123!', $user->password));
+    }
+
+    public function test_login_endpoint_is_rate_limited_after_repeated_attempts(): void
+    {
+        for ($i = 0; $i < 10; $i++) {
+            $this->postJson('/api/v1/auth/login', [
+                'username' => 'anzhel',
+                'password' => 'WrongPassword123!',
+                'device_id' => (string) Str::uuid(),
+                'device_name' => 'BruteForceBot',
+            ]);
+        }
+
+        $this->postJson('/api/v1/auth/login', [
+            'username' => 'anzhel',
+            'password' => 'WrongPassword123!',
+            'device_id' => (string) Str::uuid(),
+            'device_name' => 'BruteForceBot',
+        ])->assertStatus(429);
     }
 
     public function test_login_issues_token_and_binds_device_and_logout_revokes_token(): void

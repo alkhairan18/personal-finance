@@ -158,4 +158,76 @@ void main() {
     final items = await db.getActiveWishlistItems();
     expect(items.any((w) => w.id == wishlistId && w.savedAmount == 500000), isTrue);
   });
+
+  test('reversing a debt_payment transaction restores debt remainingAmount and queues reverse_debt_payment', () async {
+    final debtId = await debtRepo.createDebt(
+      direction: 'payable',
+      counterpartyName: 'Budi',
+      principalAmount: 1000000,
+      startDate: '2026-10-01',
+      title: 'Pinjaman Modal',
+    );
+
+    final paymentResult = await debtRepo.recordPayment(
+      debtId: debtId,
+      amount: 1000000,
+      paymentDate: '2026-10-17',
+    );
+    expect((await db.getDebtById(debtId))!.remainingAmount, 0);
+    expect((await db.getDebtById(debtId))!.status, 'paid');
+
+    await txRepo.reverseTransaction(
+      originalTransactionId: paymentResult.transactionId,
+      reversalDate: '2026-10-18',
+      notes: 'Salah input pelunasan',
+    );
+
+    final restoredDebt = await db.getDebtById(debtId);
+    expect(restoredDebt!.remainingAmount, 1000000);
+    expect(restoredDebt.status, 'active');
+
+    final payments = await db.getDebtPayments(debtId);
+    expect(payments, isEmpty);
+    final rawPaymentRows = db.select(
+      'SELECT status FROM local_debt_payments WHERE debt_id = ?',
+      [debtId],
+    );
+    expect(rawPaymentRows.single['status'], 'reversed');
+
+    final outbox = await db.getPendingOutboxItems();
+    expect(outbox.last.operationType, 'reverse_debt_payment');
+    expect(outbox.last.entityId, paymentResult.paymentId);
+  });
+
+  test('reversing an installment_payment transaction restores installment paidAmount and plan status', () async {
+    final planId = await installmentRepo.createPlanWithSchedule(
+      title: 'Kredit HP',
+      totalAmount: 1000000,
+      installmentCount: 1,
+      frequency: 'monthly',
+      startDate: '2026-10-01',
+    );
+
+    final terms = await db.getInstallmentsForPlan(planId);
+    await installmentRepo.recordPayment(
+      installmentId: terms.single.id,
+      amount: 1000000,
+      paymentDate: '2026-10-17',
+    );
+    expect((await db.getInstallmentsForPlan(planId)).single.status, 'paid');
+
+    final activeTxs = await db.getActiveTransactions();
+    await txRepo.reverseTransaction(
+      originalTransactionId: activeTxs.single.id,
+      reversalDate: '2026-10-18',
+      notes: 'Batal bayar termin',
+    );
+
+    final restoredTerm = (await db.getInstallmentsForPlan(planId)).single;
+    expect(restoredTerm.paidAmount, 0);
+    expect(restoredTerm.status, 'pending');
+
+    final outbox = await db.getPendingOutboxItems();
+    expect(outbox.last.operationType, 'reverse_installment_payment');
+  });
 }
