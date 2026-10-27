@@ -85,6 +85,52 @@ class _QuickAddTransactionSheetState
     }
   }
 
+  Future<void> _showAddCategoryDialog() async {
+    final nameCtrl = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Tambah Kategori Baru'),
+        content: TextField(
+          key: const Key('new_category_name_input'),
+          controller: nameCtrl,
+          decoration: const InputDecoration(
+            labelText: 'Nama Kategori',
+            hintText: 'Contoh: Kopi & Camilan',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            key: const Key('save_new_category_button'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SwissLedgerColors.accentTeal,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              final repo = ref.read(transactionRepositoryProvider);
+              final name = nameCtrl.text.trim();
+              if (repo == null || name.isEmpty) return;
+              final newId = await repo.createCustomCategory(
+                name: name,
+                kind: _selectedType,
+              );
+              await _loadCategories();
+              if (mounted) {
+                setState(() => _selectedCategoryId = newId);
+              }
+              if (ctx.mounted) Navigator.of(ctx).pop();
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _submitTransaction() async {
     final amount = _amount;
     if (amount <= 0) return;
@@ -270,9 +316,45 @@ class _QuickAddTransactionSheetState
               height: 36,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
-                itemCount: _categories.length,
+                itemCount: _categories.length + 1,
                 separatorBuilder: (_, _) => const SizedBox(width: 8),
                 itemBuilder: (context, index) {
+                  if (index == _categories.length) {
+                    return InkWell(
+                      key: const Key('quick_add_new_category_chip'),
+                      onTap: _showAddCategoryDialog,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 11),
+                        decoration: BoxDecoration(
+                          color: SwissLedgerColors.surfaceSubtle,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: SwissLedgerColors.borderHairline,
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              PhosphorIconsRegular.plus,
+                              size: 13,
+                              color: SwissLedgerColors.accentTeal,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Kategori',
+                              style: SwissLedgerTypography.sans(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: SwissLedgerColors.accentTeal,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
                   final cat = _categories[index];
                   final isSelected = cat.id == _selectedCategoryId;
                   return InkWell(

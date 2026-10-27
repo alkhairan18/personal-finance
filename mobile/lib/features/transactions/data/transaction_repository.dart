@@ -80,6 +80,124 @@ class TransactionRepository {
     return txId;
   }
 
+  Future<void> updateTransaction({
+    required String transactionId,
+    required int amount,
+    required String transactionDate,
+    String? type,
+    String? categoryId,
+    String? title,
+    String? notes,
+  }) async {
+    if (amount <= 0) {
+      throw ArgumentError('Transaction amount must be greater than zero');
+    }
+
+    final existing = await db.getTransactionById(transactionId);
+    if (existing == null) {
+      throw StateError('Transaction not found');
+    }
+    if (existing.status != 'active') {
+      throw StateError('Only active transactions can be updated');
+    }
+
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final newVersion = existing.version + 1;
+    final resolvedType = type ?? existing.type;
+    final resolvedCategory = categoryId ?? existing.categoryId;
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_transactions
+        SET type = ?, amount = ?, transaction_date = ?, category_id = ?,
+            title = ?, notes = ?, version = ?, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ? AND user_id = ?
+        ''',
+        [
+          resolvedType,
+          amount,
+          transactionDate,
+          resolvedCategory,
+          title,
+          notes,
+          newVersion,
+          nowIso,
+          transactionId,
+          db.userId,
+        ],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'transaction',
+        entityId: transactionId,
+        operationType: 'update',
+        baseVersion: existing.version,
+        payload: {
+          'type': resolvedType,
+          'source_type': existing.sourceType,
+          'amount': amount,
+          'transaction_date': transactionDate,
+          'category_id': resolvedCategory,
+          'title': title,
+          'notes': notes,
+        },
+      );
+    });
+  }
+
+  Future<String> createCustomCategory({
+    required String name,
+    required String kind,
+    String iconKey = 'receipt',
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('Nama kategori wajib diisi');
+    }
+
+    final catId = _uuid.v4();
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        INSERT INTO local_categories (
+          id, user_id, name, kind, icon_key, color_hex, is_system, is_archived, version, sync_status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, '#0F766E', 0, 0, 1, 'pending_create', ?, ?)
+        ''',
+        [
+          catId,
+          db.userId,
+          trimmed,
+          kind,
+          iconKey,
+          nowIso,
+          nowIso,
+        ],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'category',
+        entityId: catId,
+        operationType: 'create',
+        baseVersion: null,
+        payload: {
+          'name': trimmed,
+          'kind': kind,
+          'type': kind,
+          'icon_key': iconKey,
+        },
+      );
+    });
+
+    return catId;
+  }
+
   Future<String> reverseTransaction({
     required String originalTransactionId,
     required String reversalDate,

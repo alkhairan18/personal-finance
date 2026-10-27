@@ -12,19 +12,51 @@ class MainShellScreen extends ConsumerStatefulWidget {
   final Widget? kewajibanTab;
   final Widget? wishlistTab;
   final Widget? laporanTab;
+  final bool? enableAutoSync;
 
   const MainShellScreen({
     super.key,
     this.kewajibanTab,
     this.wishlistTab,
     this.laporanTab,
+    this.enableAutoSync,
   });
 
   @override
   ConsumerState<MainShellScreen> createState() => _MainShellScreenState();
 }
 
-class _MainShellScreenState extends ConsumerState<MainShellScreen> {
+class _MainShellScreenState extends ConsumerState<MainShellScreen>
+    with WidgetsBindingObserver {
+  bool get _shouldAutoSync =>
+      widget.enableAutoSync ??
+      !WidgetsBinding.instance.runtimeType.toString().contains('Test');
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (_shouldAutoSync) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _triggerSync(silent: true);
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _shouldAutoSync && mounted) {
+      _triggerSync(silent: true);
+    }
+  }
   int _selectedIndex = 0;
 
   Future<void> _openQuickAddSheet() async {
@@ -36,7 +68,8 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
     );
   }
 
-  Future<void> _triggerSync() async {
+  Future<void> _triggerSync({bool silent = false}) async {
+    if (ref.read(isSyncingProvider)) return;
     final syncEngine = ref.read(syncEngineProvider);
     if (syncEngine == null) return;
     ref.read(isSyncingProvider.notifier).state = true;
@@ -54,7 +87,7 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
               duration: const Duration(seconds: 2),
             ),
           );
-        } else {
+        } else if (!silent) {
           messenger.showSnackBar(
             SnackBar(
               backgroundColor: SwissLedgerColors.dangerRed,

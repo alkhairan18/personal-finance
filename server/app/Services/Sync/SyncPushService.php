@@ -400,22 +400,24 @@ class SyncPushService
     private function upsertFinancialTransaction(User $user, string $entityId, array $payload): array
     {
         $existing = FinancialTransaction::where('id', $entityId)->lockForUpdate()->first();
-        if ($existing) {
-            if ($existing->user_id !== $user->id) {
-                throw new DomainValidationException('Akses ditolak ke transaksi pengguna lain.', [], 'FORBIDDEN');
-            }
-            throw new DomainValidationException('Transaksi yang sudah terposting bersifat append-only; gunakan operasi reverse_transaction untuk koreksi.');
+        if ($existing && $existing->user_id !== $user->id) {
+            throw new DomainValidationException('Akses ditolak ke transaksi pengguna lain.', [], 'FORBIDDEN');
+        }
+        if ($existing && $existing->status !== 'posted') {
+            throw new DomainValidationException('Transaksi yang sudah dibatalkan tidak dapat diubah.');
         }
 
-        $type = (string) ($payload['type'] ?? '');
-        $amountMinor = (int) ($payload['amount_minor'] ?? 0);
-        $txDate = (string) ($payload['transaction_date'] ?? '');
+        $type = (string) ($payload['type'] ?? ($existing ? $existing->type : ''));
+        $amountMinor = (int) ($payload['amount_minor'] ?? ($existing ? $existing->amount_minor : 0));
+        $txDate = (string) ($payload['transaction_date'] ?? ($existing ? $existing->transaction_date?->format('Y-m-d') : ''));
 
         if (! in_array($type, ['income', 'expense'], true) || $amountMinor <= 0 || $txDate === '') {
             throw new DomainValidationException('Tipe, nominal (> 0), dan tanggal transaksi wajib valid.');
         }
 
-        $categoryId = $payload['category_id'] ?? null;
+        $categoryId = array_key_exists('category_id', $payload)
+            ? $payload['category_id']
+            : ($existing ? $existing->category_id : null);
         if ($categoryId) {
             $cat = Category::where('id', $categoryId)
                 ->where(function ($q) use ($user) {
@@ -427,31 +429,45 @@ class SyncPushService
             }
         }
 
-        $tx = FinancialTransaction::create([
-            'id' => $entityId,
-            'user_id' => $user->id,
-            'type' => $type,
-            'amount_minor' => $amountMinor,
-            'transaction_date' => $txDate,
-            'category_id' => $categoryId,
-            'payment_method' => $payload['payment_method'] ?? null,
-            'note' => $payload['note'] ?? null,
-            'source_type' => null,
-            'source_id' => null,
-            'status' => 'posted',
-        ]);
+        if ($existing) {
+            $existing->update([
+                'type' => $type,
+                'amount_minor' => $amountMinor,
+                'transaction_date' => $txDate,
+                'category_id' => $categoryId,
+                'payment_method' => $payload['payment_method'] ?? $existing->payment_method,
+                'note' => array_key_exists('note', $payload) ? $payload['note'] : $existing->note,
+            ]);
+            $tx = $existing->fresh();
+            $entityVersion = 2;
+        } else {
+            $tx = FinancialTransaction::create([
+                'id' => $entityId,
+                'user_id' => $user->id,
+                'type' => $type,
+                'amount_minor' => $amountMinor,
+                'transaction_date' => $txDate,
+                'category_id' => $categoryId,
+                'payment_method' => $payload['payment_method'] ?? null,
+                'note' => $payload['note'] ?? null,
+                'source_type' => null,
+                'source_id' => null,
+                'status' => 'posted',
+            ]);
+            $entityVersion = 1;
+        }
 
         SyncChange::create([
             'user_id' => $user->id,
             'entity_type' => 'financial_transaction',
             'entity_id' => $tx->id,
-            'entity_version' => 1,
+            'entity_version' => $entityVersion,
             'operation' => 'upsert',
             'payload' => $this->transactionService->serializeTransaction($tx),
             'created_at' => now(),
         ]);
 
-        return ['entity_version' => 1];
+        return ['entity_version' => $entityVersion];
     }
 
     private function upsertCategory(User $user, string $entityId, ?int $baseVersion, array $payload): array

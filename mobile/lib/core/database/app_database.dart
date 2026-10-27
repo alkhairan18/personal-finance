@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart' as sql;
@@ -495,12 +496,37 @@ class AppDatabase extends ChangeNotifier {
         'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
         ['key_configured', 'true'],
       );
+      final fingerprint = sha256
+          .convert(utf8.encode('pf-db-key-v1:$userId:$encryptionKey'))
+          .toString();
+      final existingFpRows = instance.select(
+        "SELECT value FROM sync_metadata WHERE key = 'key_fingerprint' LIMIT 1",
+      );
+      if (existingFpRows.isNotEmpty) {
+        final existingFp = existingFpRows.first['value'] as String?;
+        if (existingFp != null &&
+            existingFp.isNotEmpty &&
+            existingFp != fingerprint) {
+          raw.dispose();
+          throw StateError('Kunci keamanan database lokal tidak cocok.');
+        }
+      } else {
+        instance.execute(
+          'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
+          ['key_fingerprint', fingerprint],
+        );
+      }
+      instance.execute(
+        'INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)',
+        ['key_configured', 'true'],
+      );
     }
     return instance;
   }
 
   void _initializeSchema() {
     _rawDb.execute('PRAGMA foreign_keys = ON;');
+    _rawDb.execute('PRAGMA secure_delete = ON;');
     _rawDb.execute('''
       CREATE TABLE IF NOT EXISTS local_categories (
         id TEXT PRIMARY KEY,

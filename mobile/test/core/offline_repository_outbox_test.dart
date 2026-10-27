@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/features/debts/data/debt_repository.dart';
@@ -229,5 +231,66 @@ void main() {
 
     final outbox = await db.getPendingOutboxItems();
     expect(outbox.last.operationType, 'reverse_installment_payment');
+
+    final customCatId = await txRepo.createCustomCategory(
+      name: 'Kopi & Matcha',
+      kind: 'expense',
+      iconKey: 'fork_knife',
+    );
+    final categories = await db.getActiveCategories(kind: 'expense');
+    expect(categories.any((c) => c.id == customCatId && c.name == 'Kopi & Matcha'), isTrue);
+
+    final txId = await txRepo.createTransaction(
+      type: 'expense',
+      amount: 35000,
+      transactionDate: '2026-10-18',
+      categoryId: customCatId,
+      title: 'Kopi Pagi',
+    );
+
+    await txRepo.updateTransaction(
+      transactionId: txId,
+      amount: 48000,
+      transactionDate: '2026-10-19',
+      categoryId: customCatId,
+      title: 'Kopi Pagi + Pastry',
+      notes: 'Meeting klien',
+    );
+
+    final updatedTx = await db.getTransactionById(txId);
+    expect(updatedTx!.amount, 48000);
+    expect(updatedTx.title, 'Kopi Pagi + Pastry');
+    expect(updatedTx.transactionDate, '2026-10-19');
+    expect(updatedTx.version, 2);
+
+    final tempDir = await Directory.systemTemp.createTemp('pf_db_key_test_');
+    try {
+      final db1 = AppDatabase.openFile(
+        userId: 'user-anzhel-uuid',
+        directoryPath: tempDir.path,
+        encryptionKey: 'correct-key-123',
+      );
+      await db1.close();
+
+      expect(
+        () => AppDatabase.openFile(
+          userId: 'user-anzhel-uuid',
+          directoryPath: tempDir.path,
+          encryptionKey: 'tampered-key-999',
+        ),
+        throwsStateError,
+      );
+
+      final db2 = AppDatabase.openFile(
+        userId: 'user-anzhel-uuid',
+        directoryPath: tempDir.path,
+        encryptionKey: 'correct-key-123',
+      );
+      await db2.close();
+    } finally {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    }
   });
 }

@@ -364,6 +364,16 @@ class SyncEngine {
         'note': rawPayload['note'] ?? rawPayload['notes'],
         'status': validStatus,
       };
+    } else if (item.entityType == 'category') {
+      normalizedPayload = {
+        ...rawPayload,
+        'type': rawPayload['type'] ?? rawPayload['kind'] ?? 'expense',
+        'icon_key': rawPayload['icon_key'] ?? 'receipt',
+      };
+    } else {
+      normalizedPayload = {
+        ...rawPayload,
+      };
     }
 
     return <String, dynamic>{
