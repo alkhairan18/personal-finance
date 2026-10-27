@@ -92,6 +92,32 @@ class DioApiClient implements SyncApiGateway {
     );
   }
 
+  Future<Map<String, dynamic>> register({
+    required String name,
+    required String username,
+    required String password,
+    required String deviceId,
+    required String deviceName,
+    String appVersion = '1.0.0',
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/api/v1/auth/register',
+        data: {
+          'name': name,
+          'username': username,
+          'password': password,
+          'device_id': deviceId,
+          'device_name': deviceName,
+          'app_version': appVersion,
+        },
+      );
+      return response.data ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw _mapDioError(e);
+    }
+  }
+
   Future<Map<String, dynamic>> login({
     required String username,
     required String password,

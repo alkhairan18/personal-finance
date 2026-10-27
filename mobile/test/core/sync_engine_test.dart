@@ -332,5 +332,31 @@ void main() {
     expect(afterLocal.savedAmount, 6000000);
     final outbox = await db.getPendingOutboxItems();
     expect(outbox.any((o) => o.entityId == 'wl-1' && o.baseVersion == 4), isTrue);
+
+    expect(
+      AuthRepository.deterministicIdForUsername('anzhel'),
+      '22222222-2222-4222-8222-000000000001',
+    );
+    expect(
+      AuthRepository.deterministicIdForUsername('wina'),
+      '22222222-2222-4222-8222-000000000002',
+    );
+    final budiId = AuthRepository.deterministicIdForUsername('budi_santoso');
+    final sitiId = AuthRepository.deterministicIdForUsername('siti_rahma');
+    expect(budiId, isNot('22222222-2222-4222-8222-000000000001'));
+    expect(budiId, isNot(sitiId));
+    expect(budiId, AuthRepository.deterministicIdForUsername('BUDI_SANTOSO'));
+
+    final repo = AuthRepository(inMemoryMode: true);
+    final budiSession = await repo.register(
+      displayName: 'Budi Santoso',
+      username: 'budi_santoso',
+      password: 'PasswordKuat123!',
+      serverUrl: 'http://127.0.0.1:9',
+    );
+    expect(budiSession.username, 'budi_santoso');
+    expect(budiSession.displayName, 'Budi Santoso');
+    expect(budiSession.userId, budiId);
+    await repo.logout(forceDiscardPending: true);
   });
 }

@@ -220,7 +220,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                     onPressed: () => _exportPdf(
                       context,
                       db,
-                      session?.displayName ?? 'Anzhel',
+                      session?.displayName ?? 'Pengguna',
                       selectedMonth,
                     ),
                     icon: const Icon(PhosphorIconsRegular.filePdf, size: 16),
@@ -239,7 +239,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                     onPressed: () => _exportBackupJson(
                       context,
                       db,
-                      session?.displayName ?? 'Anzhel',
+                      session?.displayName ?? 'Pengguna',
                     ),
                     icon: const Icon(
                       PhosphorIconsRegular.downloadSimple,
@@ -402,7 +402,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
               onPressed: () => _handleSafeLogout(context, ref),
               icon: const Icon(PhosphorIconsRegular.signOut, size: 16),
               label: Text(
-                'Keluar dari Akun (${session?.displayName ?? 'Anzhel'})',
+                'Keluar dari Akun (${session?.displayName ?? 'Pengguna'})',
                 style: SwissLedgerTypography.sans(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,

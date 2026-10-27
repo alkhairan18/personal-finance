@@ -6,6 +6,7 @@ import 'package:personal_finance/app/shell/main_shell_screen.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/features/auth/data/auth_repository.dart';
+import 'package:personal_finance/features/auth/presentation/login_screen.dart';
 
 void main() {
   late AppDatabase db;
@@ -78,6 +79,44 @@ void main() {
       // Verify Month Navigation buttons exist
       expect(find.byKey(const Key('buku_kas_prev_month_button')), findsOneWidget);
       expect(find.byKey(const Key('buku_kas_next_month_button')), findsOneWidget);
+
+      // Test LoginScreen Daftar Baru tab for any user
+      final multiUserAuthRepo = AuthRepository(inMemoryMode: true);
+      await tester.pumpWidget(
+        ProviderScope(
+          key: UniqueKey(),
+          overrides: [
+            authRepositoryProvider.overrideWith((ref) => multiUserAuthRepo),
+          ],
+          child: MaterialApp(
+            theme: SwissLedgerTheme.light(),
+            home: const LoginScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('auth_mode_register_tab')));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('register_display_name_field')),
+        'Budi Santoso',
+      );
+      await tester.enterText(
+        find.byKey(const Key('login_username_field')),
+        'budi_santoso',
+      );
+      await tester.enterText(
+        find.byKey(const Key('login_password_field')),
+        'PasswordKuat123!',
+      );
+      await tester.tap(find.byKey(const Key('login_submit_button')));
+      await tester.pumpAndSettle();
+
+      expect(multiUserAuthRepo.currentSession?.username, 'budi_santoso');
+      expect(multiUserAuthRepo.currentSession?.displayName, 'Budi Santoso');
+      await multiUserAuthRepo.logout(forceDiscardPending: true);
     },
   );
 }

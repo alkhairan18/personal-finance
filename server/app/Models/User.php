@@ -40,4 +40,21 @@ class User extends Authenticatable
     {
         return $this->hasMany(Device::class);
     }
+
+    public static function deterministicIdForUsername(string $username): string
+    {
+        $clean = strtolower(trim($username));
+        if ($clean === 'anzhel') {
+            return '22222222-2222-4222-8222-000000000001';
+        }
+        if ($clean === 'wina') {
+            return '22222222-2222-4222-8222-000000000002';
+        }
+        $hex = hash('sha256', 'pf-user-id-v1:' . $clean);
+        return substr($hex, 0, 8) . '-'
+            . substr($hex, 8, 4) . '-4'
+            . substr($hex, 13, 3) . '-8'
+            . substr($hex, 17, 3) . '-'
+            . substr($hex, 20, 12);
+    }
 }

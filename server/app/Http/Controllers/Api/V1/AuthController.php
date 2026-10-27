@@ -13,6 +13,75 @@ use Illuminate\Support\Facades\RateLimiter;
 
 class AuthController extends Controller
 {
+    public function register(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:120'],
+            'username' => ['required', 'string', 'min:3', 'max:50', 'regex:/^[a-zA-Z0-9_.-]+$/'],
+            'password' => ['required', 'string', 'min:8'],
+            'device_id' => ['required', 'uuid'],
+            'device_name' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $normalizedUsername = strtolower(trim($validated['username']));
+        $existingUser = User::whereRaw('LOWER(username) = ?', [$normalizedUsername])->first();
+        if ($existingUser) {
+            return ApiErrorResponse::make(
+                'VALIDATION_ERROR',
+                'Username sudah digunakan oleh akun lain.',
+                ['username' => ['Username sudah digunakan.']],
+                422
+            );
+        }
+
+        $existingDevice = Device::find($validated['device_id']);
+        if ($existingDevice) {
+            return ApiErrorResponse::make(
+                'FORBIDDEN',
+                'ID perangkat sudah terikat ke akun lain.',
+                [],
+                403
+            );
+        }
+
+        $user = User::create([
+            'id' => User::deterministicIdForUsername($normalizedUsername),
+            'name' => trim($validated['name']),
+            'username' => $normalizedUsername,
+            'email' => null,
+            'password' => Hash::make($validated['password']),
+            'is_active' => true,
+        ]);
+
+        $device = Device::create([
+            'id' => $validated['device_id'],
+            'user_id' => $user->id,
+            'device_name' => $validated['device_name'] ?? 'Android pribadi',
+            'last_seen_at' => now(),
+            'revoked_at' => null,
+        ]);
+
+        $expiresAt = now()->addDays(30)->utc();
+        $newToken = $user->createToken(
+            $device->device_name ?? 'Android pribadi',
+            ['sync', 'device:' . $device->id],
+            $expiresAt
+        );
+
+        return response()->json([
+            'data' => [
+                'token' => $newToken->plainTextToken,
+                'token_type' => 'Bearer',
+                'expires_at' => $expiresAt->toIso8601ZuluString(),
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'username' => $user->username,
+                ],
+            ],
+        ], 201);
+    }
+
     public function login(Request $request): JsonResponse
     {
         $validated = $request->validate([
