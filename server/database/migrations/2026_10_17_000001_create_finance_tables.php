@@ -153,6 +153,7 @@ return new class extends Migration
             $table->foreignUuid('user_id')->constrained('users')->cascadeOnDelete();
             $table->string('title');
             $table->bigInteger('target_price');
+            $table->bigInteger('saved_amount')->default(0);
             $table->date('target_date')->nullable();
             $table->string('priority')->default('medium'); // low, medium, high
             $table->string('category')->nullable();

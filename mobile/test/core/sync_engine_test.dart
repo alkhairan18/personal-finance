@@ -255,4 +255,82 @@ void main() {
     await authRepo.logout(forceDiscardPending: true);
     expect(authRepo.currentSession, isNull);
   });
+
+  test('DioApiClient.normalizeBaseUrl strips trailing /api/v1 and slashes cleanly', () {
+    expect(
+      DioApiClient.normalizeBaseUrl('http://192.168.1.6:8000/api/v1/'),
+      'http://192.168.1.6:8000',
+    );
+    expect(
+      DioApiClient.normalizeBaseUrl('http://192.168.1.6:8000/'),
+      'http://192.168.1.6:8000',
+    );
+  });
+
+  test('SyncEngine conflict resolution supports both UseServer and UseLocal', () async {
+    await db.recordSyncConflict(
+      id: 'conf-1',
+      operationId: 'op-1',
+      entityType: 'wishlist',
+      entityId: 'wl-1',
+      localPayload: {
+        'id': 'wl-1',
+        'item_name': 'Laptop Lokal',
+        'target_amount': 12000000,
+        'saved_amount': 3000000,
+        'priority': 'high',
+        'status': 'saving',
+      },
+      serverPayload: {
+        'id': 'wl-1',
+        'title': 'Laptop Server',
+        'target_price': 15000000,
+        'saved_amount': 5000000,
+        'priority': 'high',
+        'status': 'saving',
+        'version': 4,
+      },
+    );
+
+    await syncEngine.resolveConflictUseServer('conf-1');
+    expect(await db.getSyncConflicts(), isEmpty);
+    final afterServer = await db.getWishlistById('wl-1');
+    expect(afterServer, isNotNull);
+    expect(afterServer!.itemName, 'Laptop Server');
+    expect(afterServer.targetAmount, 15000000);
+    expect(afterServer.savedAmount, 5000000);
+    expect(afterServer.version, 4);
+
+    await db.recordSyncConflict(
+      id: 'conf-2',
+      operationId: 'op-2',
+      entityType: 'wishlist',
+      entityId: 'wl-1',
+      localPayload: {
+        'id': 'wl-1',
+        'item_name': 'Laptop Lokal Override',
+        'target_amount': 14000000,
+        'saved_amount': 6000000,
+        'priority': 'high',
+        'status': 'saving',
+      },
+      serverPayload: {
+        'id': 'wl-1',
+        'title': 'Laptop Server',
+        'target_price': 15000000,
+        'saved_amount': 5000000,
+        'priority': 'high',
+        'status': 'saving',
+        'version': 4,
+      },
+    );
+
+    await syncEngine.resolveConflictUseLocal('conf-2');
+    expect(await db.getSyncConflicts(), isEmpty);
+    final afterLocal = await db.getWishlistById('wl-1');
+    expect(afterLocal!.itemName, 'Laptop Lokal Override');
+    expect(afterLocal.savedAmount, 6000000);
+    final outbox = await db.getPendingOutboxItems();
+    expect(outbox.any((o) => o.entityId == 'wl-1' && o.baseVersion == 4), isTrue);
+  });
 }

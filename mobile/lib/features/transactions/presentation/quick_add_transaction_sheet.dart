@@ -73,6 +73,18 @@ class _QuickAddTransactionSheetState
     });
   }
 
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked != null && mounted) {
+      setState(() => _selectedDate = picked);
+    }
+  }
+
   Future<void> _submitTransaction() async {
     final amount = _amount;
     if (amount <= 0) return;
@@ -106,6 +118,8 @@ class _QuickAddTransactionSheetState
   @override
   Widget build(BuildContext context) {
     final formattedDigits = RupiahFormatter.formatNumberOnly(_amount);
+    final dateIso =
+        '${_selectedDate.year.toString().padLeft(4, '0')}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
 
     return Container(
       decoration: const BoxDecoration(
@@ -192,13 +206,51 @@ class _QuickAddTransactionSheetState
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    'Rp',
-                    style: SwissLedgerTypography.monoTabular(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: SwissLedgerColors.textMuted,
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        'Rp',
+                        style: SwissLedgerTypography.monoTabular(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: SwissLedgerColors.textMuted,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      InkWell(
+                        key: const Key('quick_add_date_picker_button'),
+                        onTap: _pickDate,
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: SwissLedgerColors.surfaceSubtle,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                PhosphorIconsRegular.calendarBlank,
+                                size: 12,
+                                color: SwissLedgerColors.textMuted,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                dateIso,
+                                style: SwissLedgerTypography.monoTabular(
+                                  fontSize: 10,
+                                  color: SwissLedgerColors.textMuted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   Text(
                     formattedDigits,

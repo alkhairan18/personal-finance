@@ -213,6 +213,47 @@ class _WishlistCard extends ConsumerWidget {
 
   const _WishlistCard({required this.item});
 
+  Future<void> _showUpdateSavingsDialog(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final amountCtrl = TextEditingController(text: item.savedAmount.toString());
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Tabungan ${item.itemName}'),
+        content: TextField(
+          key: const Key('wishlist_savings_amount_field'),
+          controller: amountCtrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'Total Dana Terkumpul (Rp)',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            key: const Key('wishlist_savings_submit_button'),
+            onPressed: () async {
+              final nextSaved = RupiahFormatter.parseDigits(amountCtrl.text);
+              final repo = ref.read(wishlistRepositoryProvider);
+              if (repo == null) return;
+              await repo.updateSavedAmount(
+                wishlistId: item.id,
+                newSavedAmount: nextSaved,
+              );
+              if (ctx.mounted) Navigator.of(ctx).pop();
+            },
+            child: const Text('Simpan Tabungan'),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _priorityLabel(String p) {
     switch (p) {
       case 'high':
@@ -324,25 +365,50 @@ class _WishlistCard extends ConsumerWidget {
           ),
           if (item.status != 'purchased') ...[
             const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () async {
-                    final repo = ref.read(wishlistRepositoryProvider);
-                    if (repo == null) return;
-                    await repo.markPurchased(item.id);
-                  },
-                  child: Text(
-                    'Tandai Dibeli',
-                    style: SwissLedgerTypography.sans(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: SwissLedgerColors.accentTeal,
+            Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  OutlinedButton(
+                    key: Key('wishlist_add_savings_${item.id}'),
+                    onPressed: () => _showUpdateSavingsDialog(context, ref),
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                    ),
+                    child: Text(
+                      'Tambah Tabungan',
+                      style: SwissLedgerTypography.sans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: SwissLedgerColors.textPrimary,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                  TextButton(
+                    onPressed: () async {
+                      final repo = ref.read(wishlistRepositoryProvider);
+                      if (repo == null) return;
+                      await repo.markPurchased(item.id);
+                    },
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                    ),
+                    child: Text(
+                      'Tandai Dibeli',
+                      style: SwissLedgerTypography.sans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: SwissLedgerColors.accentTeal,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ],

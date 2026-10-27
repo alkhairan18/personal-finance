@@ -216,6 +216,7 @@ class SyncPushService
         }
 
         $targetPrice = (int) ($payload['target_price'] ?? 0);
+        $savedAmount = max(0, (int) ($payload['saved_amount'] ?? ($existing ? $existing->saved_amount : 0)));
         $title = trim((string) ($payload['title'] ?? ''));
         if ($title === '' || $targetPrice <= 0) {
             throw new DomainValidationException('Nama dan harga target wishlist wajib valid (> 0).');
@@ -243,6 +244,7 @@ class SyncPushService
             $existing->update([
                 'title' => $title,
                 'target_price' => $targetPrice,
+                'saved_amount' => $savedAmount,
                 'target_date' => $payload['target_date'] ?? null,
                 'priority' => $priority,
                 'category' => $payload['category'] ?? null,
@@ -259,6 +261,7 @@ class SyncPushService
                 'user_id' => $user->id,
                 'title' => $title,
                 'target_price' => $targetPrice,
+                'saved_amount' => $savedAmount,
                 'target_date' => $payload['target_date'] ?? null,
                 'priority' => $priority,
                 'category' => $payload['category'] ?? null,
@@ -558,6 +561,7 @@ class SyncPushService
             'id' => $w->id,
             'title' => $w->title,
             'target_price' => (int) $w->target_price,
+            'saved_amount' => (int) ($w->saved_amount ?? 0),
             'target_date' => $w->target_date?->format('Y-m-d'),
             'priority' => $w->priority,
             'category' => $w->category,

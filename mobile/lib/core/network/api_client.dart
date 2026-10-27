@@ -30,16 +30,40 @@ abstract class SyncApiGateway {
 }
 
 class DioApiClient implements SyncApiGateway {
+  static const String _envBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://192.168.1.6:8000',
+  );
+
+  static String get defaultBaseUrl => normalizeBaseUrl(_envBaseUrl);
+
+  static String normalizeBaseUrl(String rawUrl) {
+    var url = rawUrl.trim();
+    if (url.isEmpty) {
+      return 'http://192.168.1.6:8000';
+    }
+    while (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    if (url.endsWith('/api/v1')) {
+      url = url.substring(0, url.length - '/api/v1'.length);
+    }
+    while (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    return url;
+  }
+
   final Dio _dio;
   String? _accessToken;
 
   DioApiClient({
-    String baseUrl = 'http://10.0.2.2:8000',
+    String? baseUrl,
     Dio? dio,
   }) : _dio = dio ??
             Dio(
               BaseOptions(
-                baseUrl: baseUrl,
+                baseUrl: normalizeBaseUrl(baseUrl ?? defaultBaseUrl),
                 connectTimeout: const Duration(seconds: 12),
                 receiveTimeout: const Duration(seconds: 15),
                 headers: {
@@ -54,7 +78,7 @@ class DioApiClient implements SyncApiGateway {
   }
 
   void setBaseUrl(String baseUrl) {
-    _dio.options.baseUrl = baseUrl.trim();
+    _dio.options.baseUrl = normalizeBaseUrl(baseUrl);
   }
 
   String get baseUrl => _dio.options.baseUrl;

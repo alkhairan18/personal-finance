@@ -74,6 +74,10 @@ void main() {
       expect(find.text('Kopi Susu Pagi'), findsOneWidget);
       expect(find.text('-Rp 45.000'), findsWidgets);
       expect(find.textContaining('1 antrean'), findsOneWidget);
+
+      // Verify Month Navigation buttons exist
+      expect(find.byKey(const Key('buku_kas_prev_month_button')), findsOneWidget);
+      expect(find.byKey(const Key('buku_kas_next_month_button')), findsOneWidget);
     },
   );
 }

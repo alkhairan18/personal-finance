@@ -8,6 +8,53 @@ import 'package:personal_finance/core/money/rupiah_formatter.dart';
 class BukuKasScreen extends ConsumerWidget {
   const BukuKasScreen({super.key});
 
+  String _shiftMonth(String currentYearMonth, int deltaMonths) {
+    final parts = currentYearMonth.split('-');
+    final year = parts.isNotEmpty ? (int.tryParse(parts[0]) ?? 2026) : 2026;
+    final month = parts.length > 1 ? (int.tryParse(parts[1]) ?? 1) : 1;
+    final shifted = DateTime(year, month + deltaMonths, 1);
+    return '${shifted.year.toString().padLeft(4, '0')}-${shifted.month.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _confirmAndReverseTransaction(
+    BuildContext context,
+    WidgetRef ref,
+    LocalTransaction tx,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Koreksi Transaksi'),
+        content: Text(
+          'Batalkan "${tx.title ?? 'Transaksi'}" sebesar ${RupiahFormatter.format(tx.amount)}? Sistem akan mencatat entri jurnal pembalik secara otomatis.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            key: const Key('confirm_reverse_tx_button'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SwissLedgerColors.dangerRed,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Ya, Koreksi'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final repo = ref.read(transactionRepositoryProvider);
+    if (repo == null) return;
+    await repo.reverseTransaction(
+      originalTransactionId: tx.id,
+      reversalDate: tx.transactionDate,
+      notes: 'Koreksi dari Buku Kas',
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final db = ref.watch(activeDatabaseProvider);
@@ -40,6 +87,8 @@ class BukuKasScreen extends ConsumerWidget {
           return true;
         }).toList();
 
+        final categoryList = data.categoriesById.values.toList();
+
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
           children: [
@@ -60,21 +109,68 @@ class BukuKasScreen extends ConsumerWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'SALDO BERSIH BULAN INI',
-                        style: SwissLedgerTypography.sans(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: SwissLedgerColors.textMuted,
-                          letterSpacing: 0.6,
+                      Expanded(
+                        child: Text(
+                          'SALDO BERSIH BULAN INI',
+                          overflow: TextOverflow.ellipsis,
+                          style: SwissLedgerTypography.sans(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: SwissLedgerColors.textMuted,
+                            letterSpacing: 0.6,
+                          ),
                         ),
                       ),
-                      Text(
-                        selectedMonth,
-                        style: SwissLedgerTypography.monoTabular(
-                          fontSize: 11,
-                          color: SwissLedgerColors.textMuted,
-                        ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          InkWell(
+                            key: const Key('buku_kas_prev_month_button'),
+                            onTap: () {
+                              ref.read(selectedMonthProvider.notifier).state =
+                                  _shiftMonth(selectedMonth, -1);
+                            },
+                            borderRadius: BorderRadius.circular(4),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              child: Icon(
+                                Icons.chevron_left,
+                                size: 16,
+                                color: SwissLedgerColors.textMuted,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            selectedMonth,
+                            style: SwissLedgerTypography.monoTabular(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: SwissLedgerColors.textPrimary,
+                            ),
+                          ),
+                          InkWell(
+                            key: const Key('buku_kas_next_month_button'),
+                            onTap: () {
+                              ref.read(selectedMonthProvider.notifier).state =
+                                  _shiftMonth(selectedMonth, 1);
+                            },
+                            borderRadius: BorderRadius.circular(4),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              child: Icon(
+                                Icons.chevron_right,
+                                size: 16,
+                                color: SwissLedgerColors.textMuted,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -236,6 +332,35 @@ class BukuKasScreen extends ConsumerWidget {
               ),
             ),
 
+            if (categoryList.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 32,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    _CategoryFilterChip(
+                      label: 'Semua Kategori',
+                      selected: selectedCatId == null,
+                      onTap: () => ref
+                          .read(selectedCategoryFilterProvider.notifier)
+                          .state = null,
+                    ),
+                    for (final c in categoryList) ...[
+                      const SizedBox(width: 6),
+                      _CategoryFilterChip(
+                        label: c.name,
+                        selected: selectedCatId == c.id,
+                        onTap: () => ref
+                            .read(selectedCategoryFilterProvider.notifier)
+                            .state = selectedCatId == c.id ? null : c.id,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+
             const SizedBox(height: 14),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -305,15 +430,11 @@ class BukuKasScreen extends ConsumerWidget {
                           _LedgerTransactionRow(
                             tx: filteredTxs[i],
                             category: data.categoriesById[filteredTxs[i].categoryId],
-                            onReverse: () async {
-                              final repo = ref.read(transactionRepositoryProvider);
-                              if (repo == null) return;
-                              await repo.reverseTransaction(
-                                originalTransactionId: filteredTxs[i].id,
-                                reversalDate: filteredTxs[i].transactionDate,
-                                notes: 'Koreksi dari Buku Kas',
-                              );
-                            },
+                            onReverse: () => _confirmAndReverseTransaction(
+                              context,
+                              ref,
+                              filteredTxs[i],
+                            ),
                           ),
                         ],
                       ],
@@ -346,6 +467,49 @@ class BukuKasScreen extends ConsumerWidget {
       activeDebts: debts.where((d) => d.remainingAmount > 0).toList(),
       totalIncome: income,
       totalExpense: expense,
+    );
+  }
+}
+
+class _CategoryFilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _CategoryFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? SwissLedgerColors.textPrimary
+              : SwissLedgerColors.surfaceElevated,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected
+                ? SwissLedgerColors.textPrimary
+                : SwissLedgerColors.borderHairline,
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: SwissLedgerTypography.sans(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : SwissLedgerColors.textPrimary,
+          ),
+        ),
+      ),
     );
   }
 }

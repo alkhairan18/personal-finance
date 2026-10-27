@@ -44,7 +44,7 @@ class _PersonalFinanceAppState extends ConsumerState<PersonalFinanceApp> {
       debugShowCheckedModeBanner: false,
       theme: SwissLedgerTheme.light(),
       darkTheme: SwissLedgerTheme.dark(),
-      themeMode: ThemeMode.system,
+      themeMode: ThemeMode.light,
       home: _restoring
           ? const Scaffold(
               body: Center(child: CircularProgressIndicator()),

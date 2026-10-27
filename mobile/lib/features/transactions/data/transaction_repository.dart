@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:uuid/uuid.dart';
 
@@ -112,14 +114,13 @@ class TransactionRepository {
         INSERT INTO local_transactions (
           id, user_id, category_id, type, source_type, amount, transaction_date,
           title, notes, status, reversal_of_transaction_id, version, sync_status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, 'pending_create', ?, ?)
+        ) VALUES (?, ?, ?, ?, 'reversal', ?, ?, ?, ?, 'active', ?, 1, 'pending_create', ?, ?)
         ''',
         [
           reversalId,
           db.userId,
           original.categoryId,
           oppositeType,
-          original.sourceType,
           original.amount,
           reversalDate,
           reversalTitle,
@@ -129,6 +130,130 @@ class TransactionRepository {
           nowIso,
         ],
       );
+
+      if (original.sourceType == 'debt_payment') {
+        final paymentRows = db.select(
+          '''
+          SELECT * FROM local_debt_payments
+          WHERE linked_transaction_id = ? AND user_id = ? AND status = 'active'
+          LIMIT 1
+          ''',
+          [originalTransactionId, db.userId],
+        );
+        if (paymentRows.isNotEmpty) {
+          final paymentRow = paymentRows.first;
+          final paymentId = paymentRow['id'] as String;
+          final debtId = paymentRow['debt_id'] as String;
+          final payAmount = paymentRow['amount'] as int;
+
+          db.execute(
+            '''
+            UPDATE local_debt_payments
+            SET status = 'reversed', version = version + 1, sync_status = 'pending_update', updated_at = ?
+            WHERE id = ? AND user_id = ?
+            ''',
+            [nowIso, paymentId, db.userId],
+          );
+
+          final debtRows = db.select(
+            'SELECT * FROM local_debts WHERE id = ? AND user_id = ? LIMIT 1',
+            [debtId, db.userId],
+          );
+          if (debtRows.isNotEmpty) {
+            final currentRem = debtRows.first['remaining_amount'] as int;
+            final principal = debtRows.first['principal_amount'] as int;
+            final restoredRem = min(principal, currentRem + payAmount);
+            db.execute(
+              '''
+              UPDATE local_debts
+              SET remaining_amount = ?, status = 'active', version = version + 1, sync_status = 'pending_update', updated_at = ?
+              WHERE id = ? AND user_id = ?
+              ''',
+              [restoredRem, nowIso, debtId, db.userId],
+            );
+          }
+
+          db.enqueueOutbox(
+            operationId: opId,
+            entityType: 'debt_payment',
+            entityId: paymentId,
+            operationType: 'reverse_debt_payment',
+            baseVersion: (paymentRow['version'] as int?) ?? 1,
+            payload: {
+              'debt_payment_id': paymentId,
+              'reversal_transaction_id': reversalId,
+              'reason': notes ?? 'Koreksi pembayaran hutang',
+            },
+          );
+          return;
+        }
+      } else if (original.sourceType == 'installment_payment') {
+        final paymentRows = db.select(
+          '''
+          SELECT * FROM local_installment_payments
+          WHERE linked_transaction_id = ? AND user_id = ? AND status = 'active'
+          LIMIT 1
+          ''',
+          [originalTransactionId, db.userId],
+        );
+        if (paymentRows.isNotEmpty) {
+          final paymentRow = paymentRows.first;
+          final paymentId = paymentRow['id'] as String;
+          final installmentId = paymentRow['installment_id'] as String;
+          final payAmount = paymentRow['amount'] as int;
+
+          db.execute(
+            '''
+            UPDATE local_installment_payments
+            SET status = 'reversed', version = version + 1, sync_status = 'pending_update', updated_at = ?
+            WHERE id = ? AND user_id = ?
+            ''',
+            [nowIso, paymentId, db.userId],
+          );
+
+          final termRows = db.select(
+            'SELECT * FROM local_installments WHERE id = ? AND user_id = ? LIMIT 1',
+            [installmentId, db.userId],
+          );
+          if (termRows.isNotEmpty) {
+            final currentPaid = termRows.first['paid_amount'] as int;
+            final planId = termRows.first['plan_id'] as String;
+            final restoredPaid = max(0, currentPaid - payAmount);
+            final restoredStatus = restoredPaid > 0 ? 'partial' : 'pending';
+            db.execute(
+              '''
+              UPDATE local_installments
+              SET paid_amount = ?, status = ?, paid_at = NULL, version = version + 1, sync_status = 'pending_update', updated_at = ?
+              WHERE id = ? AND user_id = ?
+              ''',
+              [restoredPaid, restoredStatus, nowIso, installmentId, db.userId],
+            );
+
+            db.execute(
+              '''
+              UPDATE local_installment_plans
+              SET status = 'active', version = version + 1, updated_at = ?
+              WHERE id = ? AND user_id = ? AND status = 'completed'
+              ''',
+              [nowIso, planId, db.userId],
+            );
+          }
+
+          db.enqueueOutbox(
+            operationId: opId,
+            entityType: 'installment_payment',
+            entityId: paymentId,
+            operationType: 'reverse_installment_payment',
+            baseVersion: (paymentRow['version'] as int?) ?? 1,
+            payload: {
+              'installment_payment_id': paymentId,
+              'reversal_transaction_id': reversalId,
+              'reason': notes ?? 'Koreksi pembayaran cicilan',
+            },
+          );
+          return;
+        }
+      }
 
       db.enqueueOutbox(
         operationId: opId,
