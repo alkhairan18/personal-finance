@@ -16,6 +16,7 @@ class AuthSession {
   final String accessToken;
   final String deviceId;
   final String serverUrl;
+  final String supabaseAnonKey;
 
   const AuthSession({
     required this.userId,
@@ -24,6 +25,7 @@ class AuthSession {
     required this.accessToken,
     required this.deviceId,
     required this.serverUrl,
+    this.supabaseAnonKey = '',
   });
 
   AuthSession copyWith({
@@ -33,6 +35,7 @@ class AuthSession {
     String? accessToken,
     String? deviceId,
     String? serverUrl,
+    String? supabaseAnonKey,
   }) {
     return AuthSession(
       userId: userId ?? this.userId,
@@ -41,6 +44,7 @@ class AuthSession {
       accessToken: accessToken ?? this.accessToken,
       deviceId: deviceId ?? this.deviceId,
       serverUrl: serverUrl ?? this.serverUrl,
+      supabaseAnonKey: supabaseAnonKey ?? this.supabaseAnonKey,
     );
   }
 
@@ -51,6 +55,7 @@ class AuthSession {
         'access_token': accessToken,
         'device_id': deviceId,
         'server_url': serverUrl,
+        'supabase_anon_key': supabaseAnonKey,
       };
 
   factory AuthSession.fromJson(Map<String, dynamic> json) => AuthSession(
@@ -63,6 +68,10 @@ class AuthSession {
         serverUrl: DioApiClient.normalizeBaseUrl(
           (json['server_url'] as String?) ?? DioApiClient.defaultBaseUrl,
         ),
+        supabaseAnonKey:
+            ((json['supabase_anon_key'] as String?) ??
+                    DioApiClient.defaultSupabaseAnonKey)
+                .trim(),
       );
 }
 
@@ -180,6 +189,7 @@ class AuthRepository extends ChangeNotifier {
     if (session == null) return false;
     if (session.accessToken.isNotEmpty) {
       _apiClient.setBaseUrl(session.serverUrl);
+      _apiClient.setSupabaseAnonKey(session.supabaseAnonKey);
       _apiClient.setAccessToken(session.accessToken);
       return true;
     }
@@ -193,6 +203,7 @@ class AuthRepository extends ChangeNotifier {
 
     try {
       _apiClient.setBaseUrl(session.serverUrl);
+      _apiClient.setSupabaseAnonKey(session.supabaseAnonKey);
       Map<String, dynamic> rawResponse;
       try {
         rawResponse = await _apiClient.login(
@@ -243,6 +254,7 @@ class AuthRepository extends ChangeNotifier {
     required String username,
     required String password,
     String? serverUrl,
+    String? supabaseAnonKey,
     bool allowOfflineAccountBootstrap = true,
   }) async {
     final trimmedName = displayName.trim();
@@ -263,7 +275,10 @@ class AuthRepository extends ChangeNotifier {
     final effectiveServerUrl = DioApiClient.normalizeBaseUrl(
       serverUrl ?? DioApiClient.defaultBaseUrl,
     );
+    final effectiveAnonKey =
+        (supabaseAnonKey ?? DioApiClient.defaultSupabaseAnonKey).trim();
     _apiClient.setBaseUrl(effectiveServerUrl);
+    _apiClient.setSupabaseAnonKey(effectiveAnonKey);
     final deviceId = const Uuid().v4();
     _cachedPasswordForOfflineSync = password;
 
@@ -293,6 +308,7 @@ class AuthRepository extends ChangeNotifier {
         accessToken: token,
         deviceId: deviceId,
         serverUrl: effectiveServerUrl,
+        supabaseAnonKey: effectiveAnonKey,
       );
       if (!_inMemoryMode) {
         await _persistLocalAccountCredentials(
@@ -317,6 +333,7 @@ class AuthRepository extends ChangeNotifier {
         accessToken: '',
         deviceId: deviceId,
         serverUrl: effectiveServerUrl,
+        supabaseAnonKey: effectiveAnonKey,
       );
     }
 
@@ -328,6 +345,7 @@ class AuthRepository extends ChangeNotifier {
     required String username,
     required String password,
     String? serverUrl,
+    String? supabaseAnonKey,
     bool allowOfflineAccountBootstrap = true,
   }) async {
     final normalizedUsername = username.trim().toLowerCase();
@@ -341,7 +359,10 @@ class AuthRepository extends ChangeNotifier {
     final effectiveServerUrl = DioApiClient.normalizeBaseUrl(
       serverUrl ?? DioApiClient.defaultBaseUrl,
     );
+    final effectiveAnonKey =
+        (supabaseAnonKey ?? DioApiClient.defaultSupabaseAnonKey).trim();
     _apiClient.setBaseUrl(effectiveServerUrl);
+    _apiClient.setSupabaseAnonKey(effectiveAnonKey);
     final deviceId = const Uuid().v4();
     _cachedPasswordForOfflineSync = password;
 
@@ -373,6 +394,7 @@ class AuthRepository extends ChangeNotifier {
         accessToken: token,
         deviceId: deviceId,
         serverUrl: effectiveServerUrl,
+        supabaseAnonKey: effectiveAnonKey,
       );
       if (!_inMemoryMode) {
         await _persistLocalAccountCredentials(
@@ -417,6 +439,7 @@ class AuthRepository extends ChangeNotifier {
         accessToken: '',
         deviceId: deviceId,
         serverUrl: effectiveServerUrl,
+        supabaseAnonKey: effectiveAnonKey,
       );
     }
 
@@ -446,6 +469,7 @@ class AuthRepository extends ChangeNotifier {
   Future<void> _activateSession(AuthSession session, {required bool persist}) async {
     await _activeDatabase?.close();
     _apiClient.setBaseUrl(session.serverUrl);
+    _apiClient.setSupabaseAnonKey(session.supabaseAnonKey);
     _apiClient.setAccessToken(session.accessToken);
 
     if (_inMemoryMode) {

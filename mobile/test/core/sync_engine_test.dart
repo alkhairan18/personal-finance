@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/core/network/api_client.dart';
@@ -358,5 +359,116 @@ void main() {
     expect(budiSession.displayName, 'Budi Santoso');
     expect(budiSession.userId, budiId);
     await repo.logout(forceDiscardPending: true);
+
+    expect(DioApiClient.isSupabaseUrl('https://xyzproject.supabase.co'), isTrue);
+    expect(DioApiClient.isSupabaseUrl('http://192.168.1.21:8000'), isFalse);
+
+    final recordedRequests = <RequestOptions>[];
+    final customDio = Dio(BaseOptions(baseUrl: 'https://xyzproject.supabase.co'));
+    customDio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          recordedRequests.add(options);
+          if (options.path == '/rest/v1/rpc/app_register') {
+            return handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 200,
+                data: {
+                  'data': {
+                    'token': 'supa-session-token-123',
+                    'user': {
+                      'id': AuthRepository.deterministicIdForUsername('citra_dewi'),
+                      'username': 'citra_dewi',
+                      'name': 'Citra Dewi',
+                    },
+                  },
+                },
+              ),
+            );
+          }
+          if (options.path == '/rest/v1/rpc/sync_push') {
+            return handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 200,
+                data: {
+                  'data': {
+                    'results': <Map<String, dynamic>>[],
+                  },
+                },
+              ),
+            );
+          }
+          if (options.path == '/rest/v1/rpc/sync_pull') {
+            return handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 200,
+                data: {
+                  'data': {
+                    'next_cursor': '5',
+                    'has_more': false,
+                    'changes': <Map<String, dynamic>>[],
+                  },
+                },
+              ),
+            );
+          }
+          return handler.resolve(
+            Response(
+              requestOptions: options,
+              statusCode: 200,
+              data: <String, dynamic>{},
+            ),
+          );
+        },
+      ),
+    );
+
+    final client = DioApiClient(
+      baseUrl: 'https://xyzproject.supabase.co',
+      dio: customDio,
+    );
+
+    await expectLater(
+      client.login(
+        username: 'citra_dewi',
+        password: 'PasswordKuat123!',
+        deviceId: 'dev-1',
+        deviceName: 'Pixel',
+      ),
+      throwsA(isA<ApiValidationException>()),
+    );
+
+    final supaRepo = AuthRepository(apiClient: client, inMemoryMode: true);
+    final session = await supaRepo.register(
+      displayName: 'Citra Dewi',
+      username: 'citra_dewi',
+      password: 'PasswordKuat123!',
+      serverUrl: 'https://xyzproject.supabase.co',
+      supabaseAnonKey: 'supa-anon-key-public-xyz',
+    );
+
+    expect(session.accessToken, 'supa-session-token-123');
+    expect(session.supabaseAnonKey, 'supa-anon-key-public-xyz');
+    expect(recordedRequests.first.path, '/rest/v1/rpc/app_register');
+    expect(recordedRequests.first.headers['apikey'], 'supa-anon-key-public-xyz');
+
+    await client.pushOperations(
+      clientDeviceId: 'dev-1',
+      operations: const [],
+    );
+    expect(recordedRequests[1].path, '/rest/v1/rpc/sync_push');
+    expect((recordedRequests[1].data as Map)['p_token'], 'supa-session-token-123');
+
+    final pullRes = await client.pullChanges(cursor: '0', limit: 100);
+    expect(recordedRequests[2].path, '/rest/v1/rpc/sync_pull');
+    expect((pullRes['data'] as Map)['next_cursor'], '5');
+
+    final serialized = session.toJson();
+    final restored = AuthSession.fromJson(serialized);
+    expect(restored.supabaseAnonKey, 'supa-anon-key-public-xyz');
+    await supaRepo.logout(forceDiscardPending: true);
   });
 }

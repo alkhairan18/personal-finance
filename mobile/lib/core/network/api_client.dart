@@ -32,21 +32,44 @@ abstract class SyncApiGateway {
 class DioApiClient implements SyncApiGateway {
   static const String _envBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://192.168.1.6:8000',
+    defaultValue: 'http://192.168.1.21:8000',
   );
 
-  static String get defaultBaseUrl => normalizeBaseUrl(_envBaseUrl);
+  static const String defaultSupabaseUrl = String.fromEnvironment(
+    'SUPABASE_URL',
+    defaultValue: '',
+  );
+
+  static const String defaultSupabaseAnonKey = String.fromEnvironment(
+    'SUPABASE_ANON_KEY',
+    defaultValue: '',
+  );
+
+  static String get defaultBaseUrl {
+    if (defaultSupabaseUrl.trim().isNotEmpty) {
+      return normalizeBaseUrl(defaultSupabaseUrl);
+    }
+    return normalizeBaseUrl(_envBaseUrl);
+  }
+
+  static bool isSupabaseUrl(String rawUrl) {
+    final lower = rawUrl.trim().toLowerCase();
+    return lower.contains('.supabase.co') || lower.contains('.supabase.in');
+  }
 
   static String normalizeBaseUrl(String rawUrl) {
     var url = rawUrl.trim();
     if (url.isEmpty) {
-      return 'http://192.168.1.6:8000';
+      return 'http://192.168.1.21:8000';
     }
     while (url.endsWith('/')) {
       url = url.substring(0, url.length - 1);
     }
     if (url.endsWith('/api/v1')) {
       url = url.substring(0, url.length - '/api/v1'.length);
+    }
+    if (url.endsWith('/rest/v1')) {
+      url = url.substring(0, url.length - '/rest/v1'.length);
     }
     while (url.endsWith('/')) {
       url = url.substring(0, url.length - 1);
@@ -56,11 +79,15 @@ class DioApiClient implements SyncApiGateway {
 
   final Dio _dio;
   String? _accessToken;
+  String _supabaseAnonKey;
 
   DioApiClient({
     String? baseUrl,
+    String? supabaseAnonKey,
     Dio? dio,
-  }) : _dio = dio ??
+  })  : _supabaseAnonKey =
+            (supabaseAnonKey ?? defaultSupabaseAnonKey).trim(),
+        _dio = dio ??
             Dio(
               BaseOptions(
                 baseUrl: normalizeBaseUrl(baseUrl ?? defaultBaseUrl),
@@ -81,13 +108,36 @@ class DioApiClient implements SyncApiGateway {
     _dio.options.baseUrl = normalizeBaseUrl(baseUrl);
   }
 
+  void setSupabaseAnonKey(String? anonKey) {
+    _supabaseAnonKey = (anonKey ?? '').trim();
+  }
+
   String get baseUrl => _dio.options.baseUrl;
+  String get supabaseAnonKey => _supabaseAnonKey;
+
+  bool get isSupabaseMode =>
+      isSupabaseUrl(baseUrl) || _supabaseAnonKey.isNotEmpty;
 
   Options _authorizedOptions() {
     return Options(
       headers: {
         if (_accessToken != null && _accessToken!.isNotEmpty)
           'Authorization': 'Bearer $_accessToken',
+      },
+    );
+  }
+
+  Options _supabaseRpcOptions() {
+    if (_supabaseAnonKey.isEmpty) {
+      throw const ApiValidationException(
+        'Supabase Anon Key wajib diisi untuk koneksi Supabase Cloud.',
+        statusCode: 400,
+      );
+    }
+    return Options(
+      headers: {
+        'apikey': _supabaseAnonKey,
+        'Authorization': 'Bearer $_supabaseAnonKey',
       },
     );
   }
@@ -101,6 +151,21 @@ class DioApiClient implements SyncApiGateway {
     String appVersion = '1.0.0',
   }) async {
     try {
+      if (isSupabaseMode) {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/rest/v1/rpc/app_register',
+          data: {
+            'p_name': name,
+            'p_username': username,
+            'p_password': password,
+            'p_device_id': deviceId,
+            'p_device_name': deviceName,
+          },
+          options: _supabaseRpcOptions(),
+        );
+        return response.data ?? <String, dynamic>{};
+      }
+
       final response = await _dio.post<Map<String, dynamic>>(
         '/api/v1/auth/register',
         data: {
@@ -126,6 +191,20 @@ class DioApiClient implements SyncApiGateway {
     String appVersion = '1.0.0',
   }) async {
     try {
+      if (isSupabaseMode) {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/rest/v1/rpc/app_login',
+          data: {
+            'p_username': username,
+            'p_password': password,
+            'p_device_id': deviceId,
+            'p_device_name': deviceName,
+          },
+          options: _supabaseRpcOptions(),
+        );
+        return response.data ?? <String, dynamic>{};
+      }
+
       final response = await _dio.post<Map<String, dynamic>>(
         '/api/v1/auth/login',
         data: {
@@ -145,6 +224,16 @@ class DioApiClient implements SyncApiGateway {
   Future<void> logoutRemote() async {
     if (_accessToken == null || _accessToken!.isEmpty) return;
     try {
+      if (isSupabaseMode) {
+        if (_supabaseAnonKey.isEmpty) return;
+        await _dio.post<void>(
+          '/rest/v1/rpc/app_logout',
+          data: {'p_token': _accessToken},
+          options: _supabaseRpcOptions(),
+        );
+        return;
+      }
+
       await _dio.post<void>(
         '/api/v1/auth/logout',
         options: _authorizedOptions(),
@@ -160,6 +249,19 @@ class DioApiClient implements SyncApiGateway {
     required List<Map<String, dynamic>> operations,
   }) async {
     try {
+      if (isSupabaseMode) {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/rest/v1/rpc/sync_push',
+          data: {
+            'p_token': _accessToken ?? '',
+            'p_device_id': clientDeviceId,
+            'p_operations': operations,
+          },
+          options: _supabaseRpcOptions(),
+        );
+        return response.data ?? <String, dynamic>{};
+      }
+
       final response = await _dio.post<Map<String, dynamic>>(
         '/api/v1/sync/push',
         data: {
@@ -181,6 +283,20 @@ class DioApiClient implements SyncApiGateway {
     int limit = 200,
   }) async {
     try {
+      if (isSupabaseMode) {
+        final parsedCursor = int.tryParse(cursor ?? '0') ?? 0;
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/rest/v1/rpc/sync_pull',
+          data: {
+            'p_token': _accessToken ?? '',
+            'p_cursor': parsedCursor,
+            'p_limit': limit,
+          },
+          options: _supabaseRpcOptions(),
+        );
+        return response.data ?? <String, dynamic>{};
+      }
+
       final response = await _dio.get<Map<String, dynamic>>(
         '/api/v1/sync/pull',
         queryParameters: {
@@ -196,7 +312,7 @@ class DioApiClient implements SyncApiGateway {
   }
 
   Exception _mapDioError(DioException e) {
-    final status = e.response?.statusCode;
+    var status = e.response?.statusCode;
     final data = e.response?.data;
     String? serverMsg;
     if (data is Map<String, dynamic>) {
@@ -207,12 +323,26 @@ class DioApiClient implements SyncApiGateway {
         serverMsg = data['message'] as String;
       }
     }
+    if (serverMsg != null) {
+      if (serverMsg.startsWith('INVALID_CREDENTIALS:')) {
+        status = 401;
+        serverMsg = serverMsg.substring('INVALID_CREDENTIALS:'.length).trim();
+      } else if (serverMsg.startsWith('UNAUTHENTICATED:')) {
+        status = 401;
+        serverMsg = serverMsg.substring('UNAUTHENTICATED:'.length).trim();
+      } else if (serverMsg.startsWith('VALIDATION_ERROR:')) {
+        status = 422;
+        serverMsg = serverMsg.substring('VALIDATION_ERROR:'.length).trim();
+      }
+    }
     if (status != null && status >= 400 && status < 500) {
       return ApiValidationException(
         serverMsg ?? 'Permintaan ditolak oleh server ($status)',
         statusCode: status,
       );
     }
-    return ApiNetworkException(serverMsg ?? e.message ?? 'Gagal terhubung ke server');
+    return ApiNetworkException(
+      serverMsg ?? e.message ?? 'Gagal terhubung ke server',
+    );
   }
 }
