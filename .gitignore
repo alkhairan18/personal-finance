@@ -1,12 +1,41 @@
-﻿.superpowers/
+# Workspace & Agent Tools
+.superpowers/
 tools/
-server/vendor/
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+!.env.supabase.example
 server/.env
+server/.env.*
+!server/.env.example
+!server/.env.supabase.example
 server/storage/*.key
+
+# Databases & Backups
+*.sqlite
+*.sqlite3
+*.db
 server/database/database.sqlite
+server/storage/app/backups/
+server/storage/logs/*.log
+
+# Android Signing Keys & Credentials
+*.keystore
+*.jks
+*.p12
+*.pem
+**/key.properties
+mobile/android/key.properties
+mobile/android/app/upload-keystore.jks
+google-services.json
+GoogleService-Info.plist
+
+# Dependencies & Build Artifacts
+server/vendor/
+server/node_modules/
 mobile/.dart_tool/
 mobile/build/
 mobile/.flutter-plugins
 mobile/.flutter-plugins-dependencies
-*.keystore
-*.jks
