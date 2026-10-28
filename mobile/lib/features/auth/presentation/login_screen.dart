@@ -16,6 +16,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _usernameController = TextEditingController(text: 'anzhel');
   final _passwordController = TextEditingController();
   late final TextEditingController _serverUrlController;
+  late final TextEditingController _supabaseAnonKeyController;
   bool _isRegisterMode = false;
   bool _showServerSettings = false;
   bool _isSubmitting = false;
@@ -26,6 +27,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.initState();
     _serverUrlController =
         TextEditingController(text: DioApiClient.defaultBaseUrl);
+    _supabaseAnonKeyController =
+        TextEditingController(text: DioApiClient.defaultSupabaseAnonKey);
   }
 
   @override
@@ -34,6 +37,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     _usernameController.dispose();
     _passwordController.dispose();
     _serverUrlController.dispose();
+    _supabaseAnonKeyController.dispose();
     super.dispose();
   }
 
@@ -50,12 +54,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           username: _usernameController.text,
           password: _passwordController.text,
           serverUrl: _serverUrlController.text,
+          supabaseAnonKey: _supabaseAnonKeyController.text,
         );
       } else {
         await authRepo.login(
           username: _usernameController.text,
           password: _passwordController.text,
           serverUrl: _serverUrlController.text,
+          supabaseAnonKey: _supabaseAnonKeyController.text,
         );
       }
     } catch (e) {
@@ -307,7 +313,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             const SizedBox(width: 6),
                             Expanded(
                               child: Text(
-                                'Pengaturan URL Server Sinkronisasi',
+                                'Pengaturan URL Server / Supabase Cloud',
                                 overflow: TextOverflow.ellipsis,
                                 style: SwissLedgerTypography.sans(
                                   fontSize: 12,
@@ -322,10 +328,31 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     if (_showServerSettings) ...[
                       const SizedBox(height: 8),
                       TextField(
+                        key: const Key('login_server_url_field'),
                         controller: _serverUrlController,
                         style: SwissLedgerTypography.monoTabular(fontSize: 12),
                         decoration: InputDecoration(
-                          labelText: 'URL API Server',
+                          labelText: 'URL Server / Supabase Project URL',
+                          hintText: 'https://xxxx.supabase.co atau http://192.168.1.21:8000',
+                          isDense: true,
+                          filled: true,
+                          fillColor: SwissLedgerColors.bgPrimary,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(
+                              color: SwissLedgerColors.borderHairline,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        key: const Key('login_supabase_anon_key_field'),
+                        controller: _supabaseAnonKeyController,
+                        style: SwissLedgerTypography.monoTabular(fontSize: 12),
+                        decoration: InputDecoration(
+                          labelText: 'Supabase Anon Key (Opsional untuk Cloud)',
+                          hintText: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
                           isDense: true,
                           filled: true,
                           fillColor: SwissLedgerColors.bgPrimary,
