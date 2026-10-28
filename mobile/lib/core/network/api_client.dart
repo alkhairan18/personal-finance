@@ -284,12 +284,12 @@ class DioApiClient implements SyncApiGateway {
   }) async {
     try {
       if (isSupabaseMode) {
-        final parsedCursor = int.tryParse(cursor ?? '0') ?? 0;
+
         final response = await _dio.post<Map<String, dynamic>>(
           '/rest/v1/rpc/sync_pull',
           data: {
             'p_token': _accessToken ?? '',
-            'p_cursor': parsedCursor,
+            'p_cursor': cursor ?? '0',
             'p_limit': limit,
           },
           options: _supabaseRpcOptions(),
