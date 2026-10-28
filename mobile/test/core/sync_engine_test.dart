@@ -428,6 +428,7 @@ void main() {
 
     final client = DioApiClient(
       baseUrl: 'https://xyzproject.supabase.co',
+      supabaseAnonKey: '',
       dio: customDio,
     );
 

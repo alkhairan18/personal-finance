@@ -14,6 +14,7 @@ CREATE OR REPLACE FUNCTION public.deterministic_user_id(p_username text)
 RETURNS uuid
 LANGUAGE plpgsql
 IMMUTABLE
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_clean text := lower(trim(p_username));
@@ -247,7 +248,7 @@ CREATE OR REPLACE FUNCTION public.verify_app_token(p_token text)
 RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_hash text;
@@ -287,7 +288,7 @@ CREATE OR REPLACE FUNCTION public.app_register(
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_username text := lower(trim(coalesce(p_username, '')));
@@ -347,7 +348,7 @@ CREATE OR REPLACE FUNCTION public.app_login(
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_username text := lower(trim(coalesce(p_username, '')));
@@ -398,7 +399,7 @@ CREATE OR REPLACE FUNCTION public.app_logout(p_token text)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_hash text := encode(digest(trim(coalesce(p_token, '')), 'sha256'), 'hex');
@@ -420,7 +421,7 @@ CREATE OR REPLACE FUNCTION public.sync_push(
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_user_id uuid;
@@ -610,7 +611,7 @@ CREATE OR REPLACE FUNCTION public.sync_pull(
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_user_id uuid;
