@@ -37,6 +37,10 @@ class PhosphorIconsRegular {
   static const IconData trash = Icons.delete_outline;
   static const IconData xCircle = Icons.cancel_outlined;
   static const IconData caretRight = Icons.chevron_right_outlined;
+  static const IconData clockCounterClockwise = Icons.history_outlined;
+  static const IconData chartPieSlice = Icons.pie_chart_outline;
+  static const IconData tag = Icons.label_outline;
+  static const IconData lockKey = Icons.lock_outline;
 }
 
 class SwissLedgerColors {

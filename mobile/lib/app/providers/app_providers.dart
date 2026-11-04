@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/core/sync/sync_engine.dart';
 import 'package:personal_finance/features/auth/data/auth_repository.dart';
+import 'package:personal_finance/features/budgets/data/budget_repository.dart';
 import 'package:personal_finance/features/debts/data/debt_repository.dart';
 import 'package:personal_finance/features/installments/data/installment_repository.dart';
 import 'package:personal_finance/features/transactions/data/transaction_repository.dart';
@@ -49,6 +50,12 @@ final wishlistRepositoryProvider = Provider<WishlistRepository?>((ref) {
   return WishlistRepository(db);
 });
 
+final budgetRepositoryProvider = Provider<BudgetRepository?>((ref) {
+  final db = ref.watch(activeDatabaseProvider);
+  if (db == null) return null;
+  return BudgetRepository(db);
+});
+
 final syncEngineProvider = Provider<SyncEngine?>((ref) {
   final authRepo = ref.watch(authRepositoryProvider);
   final db = ref.watch(activeDatabaseProvider);
@@ -59,5 +66,6 @@ final syncEngineProvider = Provider<SyncEngine?>((ref) {
     apiGateway: authRepo.apiClient,
     clientDeviceId: session.deviceId,
     onEnsureAuth: authRepo.ensureOnlineToken,
+    onRefreshAuth: authRepo.forceRefreshOnlineToken,
   );
 });

@@ -8,6 +8,7 @@ import 'package:personal_finance/app/shell/main_shell_screen.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/features/auth/data/auth_repository.dart';
+import 'package:personal_finance/features/budgets/data/budget_repository.dart';
 import 'package:personal_finance/features/debts/data/debt_repository.dart';
 import 'package:personal_finance/features/installments/data/installment_repository.dart';
 import 'package:personal_finance/features/reports/data/backup_export_service.dart';
@@ -22,6 +23,7 @@ void main() {
   late DebtRepository debtRepo;
   late WishlistRepository wishlistRepo;
   late TransactionRepository txRepo;
+  late BudgetRepository budgetRepo;
 
   setUp(() async {
     db = AppDatabase.inMemory(userId: 'user-anzhel-uuid');
@@ -31,6 +33,7 @@ void main() {
     debtRepo = DebtRepository(db);
     wishlistRepo = WishlistRepository(db);
     txRepo = TransactionRepository(db);
+    budgetRepo = BudgetRepository(db);
   });
 
   tearDown(() async {
@@ -38,10 +41,20 @@ void main() {
   });
 
   testWidgets(
-    '7-term installment plan renders in Kewajiban tab and Wishlist purchase does not alter cash balance',
+    '7-term installment plan renders in Kewajiban tab, supports partial payment, and Wishlist filter chips & budgets work',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(430, 932));
       addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final now = DateTime.now();
+      final currentYearMonth =
+          '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
+      final expenseCats = await db.getActiveCategories(kind: 'expense');
+      await budgetRepo.upsertBudget(
+        categoryId: expenseCats.first.id,
+        periodMonth: currentYearMonth,
+        limitAmount: 1000000,
+      );
 
       final planId = await installmentRepo.createPlanWithSchedule(
         title: 'Kredit Kamera 7 Bulan',
@@ -91,6 +104,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      // Verify Buku Kas shows budget management button
+      expect(find.byKey(const Key('manage_budgets_button')), findsOneWidget);
+
       // Navigate to Kewajiban tab
       await tester.tap(find.byKey(const Key('nav_tab_kewajiban')));
       await tester.pumpAndSettle();
@@ -101,6 +117,20 @@ void main() {
 
       expect(find.text('Kredit Kamera 7 Bulan'), findsOneWidget);
       expect(find.textContaining('1/7'), findsWidgets);
+
+      // Pay partial amount (300000) on Term #2 via the dialog
+      await tester.tap(find.text('Bayar Termin #2'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('installment_pay_amount_field')),
+        '300000',
+      );
+      await tester.tap(find.byKey(const Key('installment_pay_submit_button')));
+      await tester.pumpAndSettle();
+
+      final updatedTerm2 = await db.getInstallmentById(terms[1].id);
+      expect(updatedTerm2!.paidAmount, 300000);
+      expect(updatedTerm2.status, 'partial');
 
       // Navigate to Wishlist tab
       await tester.tap(find.byKey(const Key('nav_tab_wishlist')));
@@ -116,6 +146,17 @@ void main() {
         priority: 'medium',
       );
       await tester.pumpAndSettle();
+
+      // Filter by 'Aktif' chip -> Meja Kerja Kayu (purchased) is hidden, Sepatu Lari is shown
+      await tester.tap(find.byKey(const Key('wishlist_filter_active')));
+      await tester.pumpAndSettle();
+      expect(find.text('Sepatu Lari'), findsOneWidget);
+      expect(find.text('Meja Kerja Kayu'), findsNothing);
+
+      // Filter back to 'Semua'
+      await tester.tap(find.byKey(const Key('wishlist_filter_all')));
+      await tester.pumpAndSettle();
+      expect(find.text('Meja Kerja Kayu'), findsOneWidget);
 
       await tester.tap(find.byKey(Key('wishlist_add_savings_$savingItemId')));
       await tester.pumpAndSettle();
