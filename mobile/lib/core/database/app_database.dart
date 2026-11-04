@@ -1242,6 +1242,11 @@ class AppDatabase extends ChangeNotifier {
       [userId],
     );
     final budgets = budgetRows.map(LocalBudget.fromRow).toList();
+    final installmentRows = select(
+      'SELECT * FROM local_installments WHERE user_id = ? ORDER BY plan_id ASC, installment_number ASC',
+      [userId],
+    );
+    final installments = installmentRows.map(LocalInstallment.fromRow).toList();
     return {
       'user_id': userId,
       'exported_at': DateTime.now().toUtc().toIso8601String(),
@@ -1294,6 +1299,21 @@ class AppDatabase extends ChangeNotifier {
               'notes': pl.notes,
               'status': pl.status,
               'version': pl.version,
+            },
+          )
+          .toList(),
+      'installments': installments
+          .map(
+            (inst) => {
+              'id': inst.id,
+              'plan_id': inst.planId,
+              'installment_number': inst.installmentNumber,
+              'due_date': inst.dueDate,
+              'planned_amount': inst.plannedAmount,
+              'paid_amount': inst.paidAmount,
+              'status': inst.status,
+              'paid_at': inst.paidAt,
+              'version': inst.version,
             },
           )
           .toList(),

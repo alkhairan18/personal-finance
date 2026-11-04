@@ -776,6 +776,14 @@ BEGIN
         WHERE id = (v_payload->>'installment_id')::uuid AND user_id = v_user_id;
 
       ELSIF v_entity_type = 'installment_payment' AND v_action = 'reverse_installment_payment' THEN
+        UPDATE public.installments i
+        SET paid_amount = greatest(0, i.paid_amount - ip.amount),
+            status = CASE WHEN greatest(0, i.paid_amount - ip.amount) > 0 THEN 'partial' ELSE 'pending' END,
+            paid_at = NULL,
+            updated_at = now()
+        FROM public.installment_payments ip
+        WHERE ip.id = v_entity_id AND ip.user_id = v_user_id AND i.id = ip.installment_id AND i.user_id = v_user_id;
+
         UPDATE public.installment_payments SET status = 'reversed', updated_at = now()
         WHERE id = v_entity_id AND user_id = v_user_id;
 
