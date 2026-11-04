@@ -198,6 +198,88 @@ class TransactionRepository {
     return catId;
   }
 
+  Future<void> updateCategory({
+    required String categoryId,
+    required String name,
+    String? iconKey,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('Nama kategori wajib diisi');
+    }
+    final existing = await db.getCategoryById(categoryId);
+    if (existing == null || existing.isSystem) {
+      throw StateError('Hanya kategori kustom yang dapat diubah.');
+    }
+
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final nextVersion = existing.version + 1;
+    final resolvedIcon = iconKey ?? existing.iconKey;
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_categories
+        SET name = ?, icon_key = ?, version = ?, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ?
+        ''',
+        [trimmed, resolvedIcon, nextVersion, nowIso, categoryId],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'category',
+        entityId: categoryId,
+        operationType: 'update',
+        baseVersion: existing.version,
+        payload: {
+          'name': trimmed,
+          'kind': existing.kind,
+          'type': existing.kind,
+          'icon_key': resolvedIcon,
+        },
+      );
+    });
+  }
+
+  Future<void> archiveCategory(String categoryId) async {
+    final existing = await db.getCategoryById(categoryId);
+    if (existing == null || existing.isSystem) {
+      throw StateError('Kategori bawaan sistem tidak dapat diarsipkan.');
+    }
+
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final nextVersion = existing.version + 1;
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_categories
+        SET is_archived = 1, version = ?, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ?
+        ''',
+        [nextVersion, nowIso, categoryId],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'category',
+        entityId: categoryId,
+        operationType: 'archive',
+        baseVersion: existing.version,
+        payload: {
+          'id': categoryId,
+          'name': existing.name,
+          'kind': existing.kind,
+          'type': existing.kind,
+          'is_archived': true,
+        },
+      );
+    });
+  }
+
   Future<String> reverseTransaction({
     required String originalTransactionId,
     required String reversalDate,

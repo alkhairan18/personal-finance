@@ -184,6 +184,14 @@ class AuthRepository extends ChangeNotifier {
     }
   }
 
+  Future<bool> forceRefreshOnlineToken() async {
+    final session = _currentSession;
+    if (session == null) return false;
+    _currentSession = session.copyWith(accessToken: '');
+    _apiClient.setAccessToken(null);
+    return ensureOnlineToken();
+  }
+
   Future<bool> ensureOnlineToken() async {
     final session = _currentSession;
     if (session == null) return false;
@@ -247,6 +255,87 @@ class AuthRepository extends ChangeNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  Future<AuthSession> updateProfile({
+    required String displayName,
+    String? currentPassword,
+    String? newPassword,
+  }) async {
+    final session = _currentSession;
+    if (session == null) {
+      throw const ApiValidationException('Sesi pengguna tidak aktif.');
+    }
+    final trimmedName = displayName.trim();
+    if (trimmedName.isEmpty) {
+      throw const ApiValidationException('Nama lengkap/panggilan wajib diisi.');
+    }
+    if (newPassword != null && newPassword.isNotEmpty) {
+      if (newPassword.length < 8) {
+        throw const ApiValidationException('Kata sandi baru minimal 8 karakter.');
+      }
+      if (currentPassword == null || currentPassword.isEmpty) {
+        throw const ApiValidationException(
+          'Kata sandi saat ini wajib diisi untuk mengganti kata sandi.',
+        );
+      }
+      if (!_inMemoryMode) {
+        final storedVerifier = await _secureStorage.read(
+          key: _passwordVerifierKey(session.username),
+        );
+        final candidateVerifier =
+            _hashPasswordVerifier(session.username, currentPassword);
+        if (storedVerifier != null && storedVerifier != candidateVerifier) {
+          throw const ApiValidationException('Kata sandi saat ini tidak sesuai.');
+        }
+      } else if (_cachedPasswordForOfflineSync != null &&
+          _cachedPasswordForOfflineSync != currentPassword) {
+        throw const ApiValidationException('Kata sandi saat ini tidak sesuai.');
+      }
+    }
+
+    try {
+      if (!(_inMemoryMode && !_hasCustomApiClient) &&
+          session.accessToken.isNotEmpty) {
+        await _apiClient.updateProfile(
+          name: trimmedName,
+          currentPassword: currentPassword,
+          newPassword: newPassword,
+        );
+      }
+    } on ApiNetworkException {
+      // Allow offline profile update; local credentials are updated below
+    }
+
+    final effectivePassword = (newPassword != null && newPassword.isNotEmpty)
+        ? newPassword
+        : _cachedPasswordForOfflineSync;
+    if (effectivePassword != null && effectivePassword.isNotEmpty) {
+      _cachedPasswordForOfflineSync = effectivePassword;
+      if (!_inMemoryMode) {
+        await _persistLocalAccountCredentials(
+          username: session.username,
+          displayName: trimmedName,
+          password: effectivePassword,
+        );
+      }
+    } else if (!_inMemoryMode) {
+      await _secureStorage.write(
+        key: _displayNameKey(session.username),
+        value: trimmedName,
+      );
+    }
+
+    final updated = session.copyWith(displayName: trimmedName);
+    _currentSession = updated;
+    if (!_inMemoryMode) {
+      await _secureStorage.write(
+        key: _sessionStorageKey,
+        value: jsonEncode(updated.toJson()),
+      );
+    }
+    notifyListeners();
+    return updated;
   }
 
   Future<AuthSession> register({

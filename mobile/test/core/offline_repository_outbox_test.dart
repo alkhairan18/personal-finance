@@ -2,8 +2,10 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:personal_finance/core/database/app_database.dart';
+import 'package:personal_finance/features/budgets/data/budget_repository.dart';
 import 'package:personal_finance/features/debts/data/debt_repository.dart';
 import 'package:personal_finance/features/installments/data/installment_repository.dart';
+import 'package:personal_finance/features/reports/data/backup_export_service.dart';
 import 'package:personal_finance/features/transactions/data/transaction_repository.dart';
 import 'package:personal_finance/features/wishlist/data/wishlist_repository.dart';
 
@@ -13,6 +15,7 @@ void main() {
   late DebtRepository debtRepo;
   late InstallmentRepository installmentRepo;
   late WishlistRepository wishlistRepo;
+  late BudgetRepository budgetRepo;
 
   setUp(() async {
     db = AppDatabase.inMemory(userId: 'user-anzhel-uuid');
@@ -21,6 +24,7 @@ void main() {
     debtRepo = DebtRepository(db);
     installmentRepo = InstallmentRepository(db);
     wishlistRepo = WishlistRepository(db);
+    budgetRepo = BudgetRepository(db);
   });
 
   tearDown(() async {
@@ -291,6 +295,46 @@ void main() {
       if (await tempDir.exists()) {
         await tempDir.delete(recursive: true);
       }
+    }
+  });
+
+  test('BudgetRepository.upsertBudget uses deterministic UUID, updates existing budget on same category+month, and BackupExportService queues restored items for sync', () async {
+    final categories = await db.getActiveCategories(kind: 'expense');
+    final foodCatId = categories.first.id;
+
+    final budgetId1 = await budgetRepo.upsertBudget(
+      categoryId: foodCatId,
+      periodMonth: '2026-10',
+      limitAmount: 1500000,
+    );
+    final budgetId2 = await budgetRepo.upsertBudget(
+      categoryId: foodCatId,
+      periodMonth: '2026-10',
+      limitAmount: 2000000,
+    );
+
+    expect(budgetId1, equals(budgetId2));
+    final activeBudgets = await db.getActiveBudgets(periodMonth: '2026-10');
+    expect(activeBudgets.length, 1);
+    expect(activeBudgets.single.limitAmount, 2000000);
+    expect(activeBudgets.single.version, 2);
+
+    final backupJson = await BackupExportService.generateBackupJsonString(db);
+    final dbRestored = AppDatabase.inMemory(userId: 'user-anzhel-uuid');
+    await dbRestored.ensureDefaultCategoriesSeeded();
+    try {
+      await BackupExportService.restoreFromJsonString(
+        dbRestored,
+        backupJson,
+        enqueueForSync: true,
+      );
+      final restoredBudgets = await dbRestored.getActiveBudgets(periodMonth: '2026-10');
+      expect(restoredBudgets.length, 1);
+      expect(restoredBudgets.single.limitAmount, 2000000);
+      final outboxCount = await dbRestored.getPendingOutboxCount();
+      expect(outboxCount, greaterThanOrEqualTo(1));
+    } finally {
+      await dbRestored.close();
     }
   });
 }

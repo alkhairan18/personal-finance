@@ -25,6 +25,7 @@ class SyncEngine {
   final SyncApiGateway apiGateway;
   final String clientDeviceId;
   final Future<bool> Function()? onEnsureAuth;
+  final Future<bool> Function()? onRefreshAuth;
   final Uuid _uuid;
 
   SyncEngine({
@@ -32,6 +33,7 @@ class SyncEngine {
     required this.apiGateway,
     required this.clientDeviceId,
     this.onEnsureAuth,
+    this.onRefreshAuth,
     Uuid? uuid,
   }) : _uuid = uuid ?? const Uuid();
 
@@ -39,6 +41,19 @@ class SyncEngine {
     final cappedRetry = retryCount.clamp(0, 8);
     final baseSeconds = min(300, 1 << cappedRetry);
     return Duration(seconds: baseSeconds);
+  }
+
+  bool _isUnauthenticatedError(Object e) {
+    if (e is ApiValidationException) {
+      if (e.statusCode == 401) return true;
+      final upper = e.message.toUpperCase();
+      if (upper.contains('UNAUTHENTICATED') ||
+          upper.contains('KEDALUWARSA') ||
+          upper.contains('TOKEN TIDAK VALID')) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<SyncRunResult> synchronize() async {
@@ -49,6 +64,7 @@ class SyncEngine {
     var pushedCount = 0;
     var pulledCount = 0;
     var conflictsCount = 0;
+    var hasRefreshedAuthInThisRun = false;
 
     final pending = await db.getPendingOutboxItems();
     for (var offset = 0; offset < pending.length; offset += 100) {
@@ -57,10 +73,29 @@ class SyncEngine {
 
       Map<String, dynamic> pushResponse;
       try {
-        pushResponse = await apiGateway.pushOperations(
-          clientDeviceId: clientDeviceId,
-          operations: operationsPayload,
-        );
+        try {
+          pushResponse = await apiGateway.pushOperations(
+            clientDeviceId: clientDeviceId,
+            operations: operationsPayload,
+          );
+        } catch (e) {
+          if (_isUnauthenticatedError(e) &&
+              onRefreshAuth != null &&
+              !hasRefreshedAuthInThisRun) {
+            hasRefreshedAuthInThisRun = true;
+            final refreshed = await onRefreshAuth!();
+            if (refreshed) {
+              pushResponse = await apiGateway.pushOperations(
+                clientDeviceId: clientDeviceId,
+                operations: operationsPayload,
+              );
+            } else {
+              rethrow;
+            }
+          } else {
+            rethrow;
+          }
+        }
       } on ApiNetworkException catch (e) {
         await db.transaction(() async {
           for (final item in batch) {
@@ -119,7 +154,8 @@ class SyncEngine {
               entityId: outboxItem.entityId,
               newVersion: newVersion,
             );
-            db.execute('DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
+            db.execute(
+                'DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
             pushedCount++;
           } else if (status == 'conflict') {
             final serverState =
@@ -134,10 +170,12 @@ class SyncEngine {
               localPayload: outboxItem.payload,
               serverPayload: serverState,
             );
-            db.execute('DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
+            db.execute(
+                'DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
             conflictsCount++;
           } else if (status == 'rejected') {
-            db.execute('DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
+            db.execute(
+                'DELETE FROM sync_outbox WHERE operation_id = ?', [opId]);
           }
         }
       });
@@ -149,7 +187,23 @@ class SyncEngine {
       pageGuard++;
       Map<String, dynamic> pullResponse;
       try {
-        pullResponse = await apiGateway.pullChanges(cursor: cursor);
+        try {
+          pullResponse = await apiGateway.pullChanges(cursor: cursor);
+        } catch (e) {
+          if (_isUnauthenticatedError(e) &&
+              onRefreshAuth != null &&
+              !hasRefreshedAuthInThisRun) {
+            hasRefreshedAuthInThisRun = true;
+            final refreshed = await onRefreshAuth!();
+            if (refreshed) {
+              pullResponse = await apiGateway.pullChanges(cursor: cursor);
+            } else {
+              rethrow;
+            }
+          } else {
+            rethrow;
+          }
+        }
       } catch (e) {
         return SyncRunResult(
           success: false,
@@ -370,6 +424,15 @@ class SyncEngine {
         'type': rawPayload['type'] ?? rawPayload['kind'] ?? 'expense',
         'icon_key': rawPayload['icon_key'] ?? 'receipt',
       };
+    } else if (item.entityType == 'budget') {
+      normalizedPayload = {
+        ...rawPayload,
+        'id': rawPayload['id'] ?? item.entityId,
+        'category_id': rawPayload['category_id'],
+        'period_month': rawPayload['period_month'],
+        'limit_amount': rawPayload['limit_amount'],
+        'status': rawPayload['status'] ?? 'active',
+      };
     } else {
       normalizedPayload = {
         ...rawPayload,
@@ -428,6 +491,8 @@ class SyncEngine {
         return 'local_installment_payments';
       case 'wishlist':
         return 'local_wishlists';
+      case 'budget':
+        return 'local_budgets';
       default:
         return null;
     }
@@ -574,6 +639,7 @@ class SyncEngine {
         );
         break;
       case 'installment_plan':
+        final planId = (data['id'] as String?) ?? entityId;
         db.execute(
           '''
           INSERT OR REPLACE INTO local_installment_plans (
@@ -582,7 +648,7 @@ class SyncEngine {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
           ''',
           [
-            data['id'] ?? entityId,
+            planId,
             data['user_id'] ?? db.userId,
             data['title'] ?? 'Cicilan',
             data['vendor_name'],
@@ -598,6 +664,38 @@ class SyncEngine {
             data['updated_at'] ?? nowIso,
           ],
         );
+        final nestedTerms = data['installments'];
+        if (nestedTerms is List) {
+          for (final rawTerm in nestedTerms) {
+            if (rawTerm is! Map<String, dynamic>) continue;
+            final planned = (rawTerm['planned_amount'] as int?) ?? 1;
+            final remaining = rawTerm['remaining_amount'] as int?;
+            final paid = (rawTerm['paid_amount'] as int?) ??
+                (remaining != null ? max(0, planned - remaining) : 0);
+            db.execute(
+              '''
+              INSERT OR REPLACE INTO local_installments (
+                id, user_id, plan_id, installment_number, due_date,
+                planned_amount, paid_amount, status, paid_at, version, sync_status, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+              ''',
+              [
+                rawTerm['id'] ?? _uuid.v4(),
+                rawTerm['user_id'] ?? data['user_id'] ?? db.userId,
+                rawTerm['plan_id'] ?? planId,
+                rawTerm['sequence_no'] ?? rawTerm['installment_number'] ?? 1,
+                (rawTerm['due_date'] as String? ?? nowIso).substring(0, 10),
+                planned,
+                paid,
+                rawTerm['status'] ?? 'pending',
+                rawTerm['paid_at'],
+                rawTerm['version'] ?? 1,
+                rawTerm['created_at'] ?? nowIso,
+                rawTerm['updated_at'] ?? nowIso,
+              ],
+            );
+          }
+        }
         break;
       case 'installment':
         final planned = (data['planned_amount'] as int?) ?? 1;
@@ -676,6 +774,27 @@ class SyncEngine {
             data['url_or_reference'],
             data['note'] ?? data['notes'],
             data['status'] ?? 'planned',
+            data['version'] ?? change['entity_version'] ?? 1,
+            data['created_at'] ?? nowIso,
+            data['updated_at'] ?? nowIso,
+          ],
+        );
+        break;
+      case 'budget':
+        db.execute(
+          '''
+          INSERT OR REPLACE INTO local_budgets (
+            id, user_id, category_id, period_month, limit_amount,
+            status, version, sync_status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+          ''',
+          [
+            data['id'] ?? entityId,
+            data['user_id'] ?? db.userId,
+            data['category_id'] ?? '00000000-0000-4000-8000-000000000001',
+            data['period_month'] ?? nowIso.substring(0, 7),
+            data['limit_amount'] ?? 1,
+            data['status'] ?? 'active',
             data['version'] ?? change['entity_version'] ?? 1,
             data['created_at'] ?? nowIso,
             data['updated_at'] ?? nowIso,

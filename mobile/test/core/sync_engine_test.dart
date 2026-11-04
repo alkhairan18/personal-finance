@@ -472,4 +472,135 @@ void main() {
     expect(restored.supabaseAnonKey, 'supa-anon-key-public-xyz');
     await supaRepo.logout(forceDiscardPending: true);
   });
+
+  test('SyncEngine unpacks nested installments when pulling installment_plan and retries once via onRefreshAuth on 401', () async {
+    final categories = await db.getActiveCategories(kind: 'expense');
+    await txRepo.createTransaction(
+      type: 'expense',
+      amount: 75000,
+      categoryId: categories.first.id,
+      transactionDate: '2026-10-20',
+      title: 'Langganan Internet',
+    );
+
+    var refreshCount = 0;
+    var pushAttempts = 0;
+    final engineWithReauth = SyncEngine(
+      db: db,
+      apiGateway: api,
+      clientDeviceId: 'device-anzhel-pixel',
+      onRefreshAuth: () async {
+        refreshCount++;
+        return true;
+      },
+    );
+
+    api.onPush = (ops) async {
+      pushAttempts++;
+      if (pushAttempts == 1) {
+        throw const ApiValidationException(
+          'Token tidak valid atau telah kedaluwarsa.',
+          statusCode: 401,
+        );
+      }
+      return {
+        'results': [
+          {
+            'operation_id': ops.single['operation_id'],
+            'entity_type': 'financial_transaction',
+            'entity_id': ops.single['entity_id'],
+            'status': 'applied',
+            'new_version': 1,
+          },
+        ],
+      };
+    };
+
+    api.onPull = (cursor) async {
+      return {
+        'data': {
+          'next_cursor': '25',
+          'has_more': false,
+          'changes': [
+            {
+              'sequence_id': 25,
+              'entity_type': 'installment_plan',
+              'entity_id': 'plan-remote-1',
+              'operation': 'upsert',
+              'entity_version': 1,
+              'payload': {
+                'id': 'plan-remote-1',
+                'user_id': 'user-anzhel-uuid',
+                'title': 'Cicilan Kamera',
+                'vendor_name': 'Toko Kamera',
+                'total_amount': 3000000,
+                'installment_count': 3,
+                'frequency': 'monthly',
+                'start_date': '2026-10-01',
+                'status': 'active',
+                'version': 1,
+                'installments': [
+                  {
+                    'id': 'term-remote-1',
+                    'plan_id': 'plan-remote-1',
+                    'sequence_no': 1,
+                    'due_date': '2026-10-01',
+                    'planned_amount': 1000000,
+                    'paid_amount': 0,
+                    'status': 'pending',
+                  },
+                  {
+                    'id': 'term-remote-2',
+                    'plan_id': 'plan-remote-1',
+                    'sequence_no': 2,
+                    'due_date': '2026-11-01',
+                    'planned_amount': 1000000,
+                    'paid_amount': 0,
+                    'status': 'pending',
+                  },
+                  {
+                    'id': 'term-remote-3',
+                    'plan_id': 'plan-remote-1',
+                    'sequence_no': 3,
+                    'due_date': '2026-12-01',
+                    'planned_amount': 1000000,
+                    'paid_amount': 0,
+                    'status': 'pending',
+                  },
+                ],
+              },
+            },
+            {
+              'sequence_id': 26,
+              'entity_type': 'budget',
+              'entity_id': 'budget-remote-1',
+              'operation': 'upsert',
+              'entity_version': 1,
+              'payload': {
+                'id': 'budget-remote-1',
+                'user_id': 'user-anzhel-uuid',
+                'category_id': categories.first.id,
+                'period_month': '2026-10',
+                'limit_amount': 1250000,
+                'status': 'active',
+                'version': 1,
+              },
+            },
+          ],
+        },
+      };
+    };
+
+    final syncRes = await engineWithReauth.synchronize();
+    expect(syncRes.success, isTrue);
+    expect(refreshCount, 1);
+    expect(pushAttempts, 2);
+
+    final terms = await db.getInstallmentsForPlan('plan-remote-1');
+    expect(terms.length, 3);
+    expect(terms.first.plannedAmount, 1000000);
+
+    final budgets = await db.getActiveBudgets(periodMonth: '2026-10');
+    expect(budgets.any((b) => b.id == 'budget-remote-1' && b.limitAmount == 1250000), isTrue);
+  });
 }

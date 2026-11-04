@@ -221,6 +221,43 @@ class DioApiClient implements SyncApiGateway {
     }
   }
 
+  Future<Map<String, dynamic>> updateProfile({
+    required String name,
+    String? currentPassword,
+    String? newPassword,
+  }) async {
+    try {
+      if (isSupabaseMode) {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/rest/v1/rpc/app_update_profile',
+          data: {
+            'p_token': _accessToken ?? '',
+            'p_name': name,
+            'p_current_password': currentPassword,
+            'p_new_password': newPassword,
+          },
+          options: _supabaseRpcOptions(),
+        );
+        return response.data ?? <String, dynamic>{};
+      }
+
+      final response = await _dio.put<Map<String, dynamic>>(
+        '/api/v1/auth/profile',
+        data: {
+          'name': name,
+          if (currentPassword != null && currentPassword.isNotEmpty)
+            'current_password': currentPassword,
+          if (newPassword != null && newPassword.isNotEmpty)
+            'new_password': newPassword,
+        },
+        options: _authorizedOptions(),
+      );
+      return response.data ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw _mapDioError(e);
+    }
+  }
+
   Future<void> logoutRemote() async {
     if (_accessToken == null || _accessToken!.isEmpty) return;
     try {
@@ -284,7 +321,6 @@ class DioApiClient implements SyncApiGateway {
   }) async {
     try {
       if (isSupabaseMode) {
-
         final response = await _dio.post<Map<String, dynamic>>(
           '/rest/v1/rpc/sync_pull',
           data: {
