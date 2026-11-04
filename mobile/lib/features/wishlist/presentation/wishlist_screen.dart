@@ -8,44 +8,93 @@ import 'package:personal_finance/core/money/rupiah_formatter.dart';
 class WishlistScreen extends ConsumerWidget {
   const WishlistScreen({super.key});
 
-  Future<void> _showCreateWishlistDialog(
-      BuildContext context, WidgetRef ref) async {
-    final nameCtrl = TextEditingController();
-    final targetCtrl = TextEditingController();
-    var priority = 'medium';
+  static Future<void> showCreateOrEditWishlistDialog(
+    BuildContext context,
+    WidgetRef ref, {
+    LocalWishlist? existingItem,
+  }) async {
+    final isEdit = existingItem != null;
+    final nameCtrl = TextEditingController(text: existingItem?.itemName ?? '');
+    final targetCtrl = TextEditingController(
+      text: existingItem != null
+          ? RupiahFormatter.formatNumberOnly(existingItem.targetAmount)
+          : '',
+    );
+    var priority = existingItem?.priority ?? 'medium';
+    String? errorText;
 
     await showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setModalState) => AlertDialog(
-          title: const Text('Tambah Item Wishlist'),
+          title: Text(
+            isEdit ? 'Ubah Rencana Wishlist' : 'Tambah Item Wishlist',
+            style: SwissLedgerTypography.sans(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 TextField(
                   controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: 'Nama Barang'),
+                  decoration: const InputDecoration(
+                    labelText: 'Nama Barang / Rencana',
+                    hintText: 'Contoh: Monitor Kerja 27 Inci',
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 TextField(
                   controller: targetCtrl,
                   keyboardType: TextInputType.number,
-                  decoration:
-                      const InputDecoration(labelText: 'Target Harga (Rp)'),
+                  inputFormatters: const [RupiahInputFormatter()],
+                  style: SwissLedgerTypography.monoTabular(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Target Harga (Rp)',
+                    prefixText: 'Rp ',
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 DropdownButtonFormField<String>(
                   initialValue: priority,
+                  decoration: const InputDecoration(
+                    labelText: 'Tingkat Prioritas',
+                  ),
                   items: const [
-                    DropdownMenuItem(value: 'high', child: Text('Tinggi')),
-                    DropdownMenuItem(value: 'medium', child: Text('Sedang')),
-                    DropdownMenuItem(value: 'low', child: Text('Rendah')),
+                    DropdownMenuItem(
+                      value: 'high',
+                      child: Text('Prioritas Tinggi'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'medium',
+                      child: Text('Prioritas Sedang'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'low',
+                      child: Text('Prioritas Rendah'),
+                    ),
                   ],
                   onChanged: (v) {
                     if (v != null) setModalState(() => priority = v);
                   },
                 ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    errorText!,
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: SwissLedgerColors.dangerRed,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -58,17 +107,37 @@ class WishlistScreen extends ConsumerWidget {
               onPressed: () async {
                 final target = RupiahFormatter.parseDigits(targetCtrl.text);
                 final name = nameCtrl.text.trim();
-                if (target <= 0 || name.isEmpty) return;
+                if (name.isEmpty) {
+                  setModalState(() {
+                    errorText = 'Nama barang tidak boleh kosong.';
+                  });
+                  return;
+                }
+                if (target <= 0) {
+                  setModalState(() {
+                    errorText = 'Target harga harus lebih dari Rp 0.';
+                  });
+                  return;
+                }
                 final repo = ref.read(wishlistRepositoryProvider);
                 if (repo == null) return;
-                await repo.createWishlistItem(
-                  itemName: name,
-                  targetAmount: target,
-                  priority: priority,
-                );
+                if (isEdit) {
+                  await repo.updateWishlistItem(
+                    wishlistId: existingItem.id,
+                    itemName: name,
+                    targetAmount: target,
+                    priority: priority,
+                  );
+                } else {
+                  await repo.createWishlistItem(
+                    itemName: name,
+                    targetAmount: target,
+                    priority: priority,
+                  );
+                }
                 if (ctx.mounted) Navigator.of(ctx).pop();
               },
-              child: const Text('Simpan'),
+              child: Text(isEdit ? 'Simpan Perubahan' : 'Simpan'),
             ),
           ],
         ),
@@ -168,7 +237,7 @@ class WishlistScreen extends ConsumerWidget {
             const SizedBox(height: 10),
             OutlinedButton.icon(
               key: const Key('add_wishlist_button'),
-              onPressed: () => _showCreateWishlistDialog(context, ref),
+              onPressed: () => showCreateOrEditWishlistDialog(context, ref),
               icon: const Icon(PhosphorIconsRegular.plus, size: 15),
               label: Text(
                 'Tambah Rencana Wishlist',
@@ -187,13 +256,24 @@ class WishlistScreen extends ConsumerWidget {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: SwissLedgerColors.borderHairline),
                 ),
-                child: Text(
-                  'Belum ada daftar rencana pembelian pada Wishlist.',
-                  textAlign: TextAlign.center,
-                  style: SwissLedgerTypography.sans(
-                    fontSize: 13,
-                    color: SwissLedgerColors.textMuted,
-                  ),
+                child: Column(
+                  children: [
+                    Text(
+                      'Belum ada daftar rencana pembelian pada Wishlist.',
+                      textAlign: TextAlign.center,
+                      style: SwissLedgerTypography.sans(
+                        fontSize: 13,
+                        color: SwissLedgerColors.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: () =>
+                          showCreateOrEditWishlistDialog(context, ref),
+                      icon: const Icon(PhosphorIconsRegular.plus, size: 14),
+                      label: const Text('Buat Rencana Pertama'),
+                    ),
+                  ],
                 ),
               )
             else
@@ -217,41 +297,223 @@ class _WishlistCard extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
   ) async {
-    final amountCtrl = TextEditingController(text: item.savedAmount.toString());
+    final amountCtrl = TextEditingController(
+      text: RupiahFormatter.formatNumberOnly(item.savedAmount),
+    );
     await showDialog<void>(
       context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          final currentVal = RupiahFormatter.parseDigits(amountCtrl.text);
+          final remaining =
+              (item.targetAmount - currentVal).clamp(0, item.targetAmount);
+          return AlertDialog(
+            title: Text(
+              'Tabungan ${item.itemName}',
+              style: SwissLedgerTypography.sans(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: SwissLedgerColors.surfaceSubtle,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Target: ${RupiahFormatter.format(item.targetAmount)}',
+                          style: SwissLedgerTypography.monoTabular(
+                            fontSize: 11,
+                            color: SwissLedgerColors.textMuted,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Kurang: ${RupiahFormatter.format(remaining)}',
+                          style: SwissLedgerTypography.monoTabular(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: SwissLedgerColors.accentTeal,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'TAMBAH CEPAT KE TABUNGAN',
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: SwissLedgerColors.textMuted,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final delta in const [50000, 100000, 250000, 500000])
+                        InkWell(
+                          onTap: () {
+                            final base =
+                                RupiahFormatter.parseDigits(amountCtrl.text);
+                            final updated = base + delta;
+                            final formatted =
+                                RupiahFormatter.formatNumberOnly(updated);
+                            amountCtrl.value = TextEditingValue(
+                              text: formatted,
+                              selection: TextSelection.collapsed(
+                                offset: formatted.length,
+                              ),
+                            );
+                            setModalState(() {});
+                          },
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: SwissLedgerColors.accentTealSubtle,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: SwissLedgerColors.accentTeal,
+                                width: 1,
+                              ),
+                            ),
+                            child: Text(
+                              '+${RupiahFormatter.format(delta)}',
+                              style: SwissLedgerTypography.monoTabular(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: SwissLedgerColors.accentTeal,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const Key('wishlist_savings_amount_field'),
+                    controller: amountCtrl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: const [RupiahInputFormatter()],
+                    onChanged: (_) => setModalState(() {}),
+                    style: SwissLedgerTypography.monoTabular(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Total Dana Terkumpul (Rp)',
+                      prefixText: 'Rp ',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Batal'),
+              ),
+              ElevatedButton(
+                key: const Key('wishlist_savings_submit_button'),
+                onPressed: () async {
+                  final nextSaved =
+                      RupiahFormatter.parseDigits(amountCtrl.text);
+                  final repo = ref.read(wishlistRepositoryProvider);
+                  if (repo == null) return;
+                  await repo.updateSavedAmount(
+                    wishlistId: item.id,
+                    newSavedAmount: nextSaved,
+                  );
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                },
+                child: const Text('Simpan Tabungan'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _confirmArchiveWishlist(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Tabungan ${item.itemName}'),
-        content: TextField(
-          key: const Key('wishlist_savings_amount_field'),
-          controller: amountCtrl,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-            labelText: 'Total Dana Terkumpul (Rp)',
-          ),
+        title: const Text('Hapus Rencana Wishlist?'),
+        content: Text(
+          'Rencana "${item.itemName}" akan diarsipkan dari daftar Wishlist.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Batal'),
           ),
           ElevatedButton(
-            key: const Key('wishlist_savings_submit_button'),
-            onPressed: () async {
-              final nextSaved = RupiahFormatter.parseDigits(amountCtrl.text);
-              final repo = ref.read(wishlistRepositoryProvider);
-              if (repo == null) return;
-              await repo.updateSavedAmount(
-                wishlistId: item.id,
-                newSavedAmount: nextSaved,
-              );
-              if (ctx.mounted) Navigator.of(ctx).pop();
-            },
-            child: const Text('Simpan Tabungan'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SwissLedgerColors.dangerRed,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Hapus'),
           ),
         ],
       ),
     );
+    if (confirmed == true) {
+      final repo = ref.read(wishlistRepositoryProvider);
+      if (repo != null) {
+        await repo.archiveWishlistItem(item.id);
+      }
+    }
+  }
+
+  Future<void> _confirmMarkPurchased(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Tandai Sudah Dibeli?'),
+        content: Text(
+          'Tandai "${item.itemName}" sebagai sudah dibeli? Status perencanaan akan selesai tanpa memotong saldo Buku Kas secara otomatis.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Ya, Tandai Dibeli'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      final repo = ref.read(wishlistRepositoryProvider);
+      if (repo != null) {
+        await repo.markPurchased(item.id);
+      }
+    }
   }
 
   String _priorityLabel(String p) {
@@ -295,7 +557,6 @@ class _WishlistCard extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Text(
@@ -308,7 +569,8 @@ class _WishlistCard extends ConsumerWidget {
               ),
               Flexible(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: SwissLedgerColors.surfaceSubtle,
                     borderRadius: BorderRadius.circular(6),
@@ -323,6 +585,35 @@ class _WishlistCard extends ConsumerWidget {
                     ),
                   ),
                 ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                onPressed: () => WishlistScreen.showCreateOrEditWishlistDialog(
+                  context,
+                  ref,
+                  existingItem: item,
+                ),
+                icon: const Icon(
+                  PhosphorIconsRegular.pencilSimple,
+                  size: 15,
+                  color: SwissLedgerColors.textMuted,
+                ),
+                tooltip: 'Ubah Wishlist',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                padding: EdgeInsets.zero,
+              ),
+              IconButton(
+                onPressed: () => _confirmArchiveWishlist(context, ref),
+                icon: const Icon(
+                  PhosphorIconsRegular.trash,
+                  size: 15,
+                  color: SwissLedgerColors.dangerRed,
+                ),
+                tooltip: 'Hapus Wishlist',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                padding: EdgeInsets.zero,
               ),
             ],
           ),
@@ -389,11 +680,7 @@ class _WishlistCard extends ConsumerWidget {
                     ),
                   ),
                   TextButton(
-                    onPressed: () async {
-                      final repo = ref.read(wishlistRepositoryProvider);
-                      if (repo == null) return;
-                      await repo.markPurchased(item.id);
-                    },
+                    onPressed: () => _confirmMarkPurchased(context, ref),
                     style: TextButton.styleFrom(
                       visualDensity: VisualDensity.compact,
                       padding: const EdgeInsets.symmetric(horizontal: 10),

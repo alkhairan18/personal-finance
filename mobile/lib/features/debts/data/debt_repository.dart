@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:uuid/uuid.dart';
 
@@ -82,6 +84,96 @@ class DebtRepository {
     });
 
     return debtId;
+  }
+
+  Future<void> updateDebt({
+    required String debtId,
+    required String counterpartyName,
+    required int principalAmount,
+    String? dueDate,
+    String? title,
+  }) async {
+    final debt = await db.getDebtById(debtId);
+    if (debt == null) {
+      throw StateError('Debt not found');
+    }
+    if (principalAmount <= 0) {
+      throw ArgumentError('principalAmount must be greater than zero');
+    }
+
+    final alreadyPaid = max(0, debt.principalAmount - debt.remainingAmount);
+    final newRemaining = max(0, principalAmount - alreadyPaid);
+    final newStatus = newRemaining == 0 ? 'paid' : 'active';
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_debts
+        SET counterparty_name = ?, title = ?, principal_amount = ?, remaining_amount = ?,
+            due_date = ?, status = ?, version = version + 1, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ? AND user_id = ?
+        ''',
+        [
+          counterpartyName,
+          title,
+          principalAmount,
+          newRemaining,
+          dueDate,
+          newStatus,
+          nowIso,
+          debtId,
+          db.userId,
+        ],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'debt',
+        entityId: debtId,
+        operationType: 'update',
+        baseVersion: debt.version,
+        payload: {
+          'direction': debt.direction,
+          'counterparty_name': counterpartyName,
+          'title': title,
+          'notes': debt.notes,
+          'principal_amount': principalAmount,
+          'remaining_amount': newRemaining,
+          'start_date': debt.startDate,
+          'due_date': dueDate,
+          'status': newStatus,
+        },
+      );
+    });
+  }
+
+  Future<void> archiveDebt(String debtId) async {
+    final debt = await db.getDebtById(debtId);
+    if (debt == null) return;
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_debts
+        SET status = 'archived', version = version + 1, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ? AND user_id = ?
+        ''',
+        [nowIso, debtId, db.userId],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'debt',
+        entityId: debtId,
+        operationType: 'archive',
+        baseVersion: debt.version,
+        payload: {'id': debtId, 'status': 'archived'},
+      );
+    });
   }
 
   Future<DebtPaymentRecordResult> recordPayment({

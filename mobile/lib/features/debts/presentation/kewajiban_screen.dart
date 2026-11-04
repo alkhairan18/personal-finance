@@ -114,48 +114,134 @@ class _DebtsSubView extends ConsumerWidget {
 
   const _DebtsSubView({required this.db});
 
-  Future<void> _showCreateDebtDialog(BuildContext context, WidgetRef ref) async {
-    final counterpartyCtrl = TextEditingController();
-    final amountCtrl = TextEditingController();
-    final titleCtrl = TextEditingController();
-    var direction = 'payable';
+  Future<void> _showCreateOrEditDebtDialog(
+    BuildContext context,
+    WidgetRef ref, {
+    LocalDebt? existingDebt,
+  }) async {
+    final counterpartyCtrl = TextEditingController(
+      text: existingDebt?.counterpartyName ?? '',
+    );
+    final amountCtrl = TextEditingController(
+      text: existingDebt != null
+          ? RupiahFormatter.formatNumberOnly(existingDebt.principalAmount)
+          : '',
+    );
+    final titleCtrl = TextEditingController(text: existingDebt?.title ?? '');
+    final dueDateCtrl = TextEditingController(
+      text: existingDebt?.dueDate ?? '',
+    );
+    var direction = existingDebt?.direction ?? 'payable';
+    String? errorText;
 
     await showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setModalState) => AlertDialog(
-          title: const Text('Catat Hutang / Piutang'),
+          title: Text(
+            existingDebt == null
+                ? 'Catat Hutang / Piutang'
+                : 'Ubah Hutang / Piutang',
+          ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: direction,
-                  items: const [
-                    DropdownMenuItem(value: 'payable', child: Text('Hutang')),
-                    DropdownMenuItem(
-                        value: 'receivable', child: Text('Piutang')),
-                  ],
-                  onChanged: (v) {
-                    if (v != null) setModalState(() => direction = v);
-                  },
-                ),
-                const SizedBox(height: 8),
+                if (existingDebt == null) ...[
+                  DropdownButtonFormField<String>(
+                    initialValue: direction,
+                    items: const [
+                      DropdownMenuItem(value: 'payable', child: Text('Hutang')),
+                      DropdownMenuItem(
+                        value: 'receivable',
+                        child: Text('Piutang'),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setModalState(() => direction = v);
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 TextField(
                   controller: counterpartyCtrl,
                   decoration: const InputDecoration(labelText: 'Nama Pihak'),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 TextField(
                   controller: amountCtrl,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Nominal (Rp)'),
+                  inputFormatters: const [RupiahInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: 'Nominal Pokok (Rp)',
+                    prefixText: 'Rp ',
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: dueDateCtrl,
+                  readOnly: true,
+                  decoration: InputDecoration(
+                    labelText: 'Tanggal Jatuh Tempo (Opsional)',
+                    hintText: 'Pilih tanggal...',
+                    suffixIcon: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (dueDateCtrl.text.isNotEmpty)
+                          IconButton(
+                            icon: const Icon(
+                              PhosphorIconsRegular.xCircle,
+                              size: 16,
+                            ),
+                            onPressed: () =>
+                                setModalState(() => dueDateCtrl.clear()),
+                          ),
+                        IconButton(
+                          icon: const Icon(
+                            PhosphorIconsRegular.calendarBlank,
+                            size: 16,
+                          ),
+                          onPressed: () async {
+                            final initial =
+                                DateTime.tryParse(dueDateCtrl.text.trim()) ??
+                                DateTime.now().add(const Duration(days: 7));
+                            final picked = await showDatePicker(
+                              context: ctx,
+                              initialDate: initial,
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime(2100),
+                            );
+                            if (picked != null) {
+                              setModalState(() {
+                                dueDateCtrl.text = picked
+                                    .toIso8601String()
+                                    .substring(0, 10);
+                              });
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
                 TextField(
                   controller: titleCtrl,
-                  decoration: const InputDecoration(labelText: 'Keterangan'),
+                  decoration: const InputDecoration(
+                    labelText: 'Keterangan (Opsional)',
+                  ),
                 ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    errorText!,
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 12,
+                      color: SwissLedgerColors.dangerRed,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -168,20 +254,42 @@ class _DebtsSubView extends ConsumerWidget {
               onPressed: () async {
                 final amount = RupiahFormatter.parseDigits(amountCtrl.text);
                 final name = counterpartyCtrl.text.trim();
-                if (amount <= 0 || name.isEmpty) return;
+                if (amount <= 0 || name.isEmpty) {
+                  setModalState(() {
+                    errorText =
+                        'Nama pihak dan nominal (lebih dari Rp 0) wajib diisi.';
+                  });
+                  return;
+                }
                 final repo = ref.read(debtRepositoryProvider);
                 if (repo == null) return;
-                final todayIso =
-                    DateTime.now().toIso8601String().substring(0, 10);
-                await repo.createDebt(
-                  direction: direction,
-                  counterpartyName: name,
-                  principalAmount: amount,
-                  startDate: todayIso,
-                  title: titleCtrl.text.trim().isEmpty
-                      ? null
-                      : titleCtrl.text.trim(),
-                );
+                final dueIso = dueDateCtrl.text.trim().isEmpty
+                    ? null
+                    : dueDateCtrl.text.trim();
+                final cleanTitle = titleCtrl.text.trim().isEmpty
+                    ? null
+                    : titleCtrl.text.trim();
+
+                if (existingDebt == null) {
+                  final todayIso =
+                      DateTime.now().toIso8601String().substring(0, 10);
+                  await repo.createDebt(
+                    direction: direction,
+                    counterpartyName: name,
+                    principalAmount: amount,
+                    startDate: todayIso,
+                    dueDate: dueIso,
+                    title: cleanTitle,
+                  );
+                } else {
+                  await repo.updateDebt(
+                    debtId: existingDebt.id,
+                    counterpartyName: name,
+                    principalAmount: amount,
+                    dueDate: dueIso,
+                    title: cleanTitle,
+                  );
+                }
                 if (ctx.mounted) Navigator.of(ctx).pop();
               },
               child: const Text('Simpan'),
@@ -276,7 +384,7 @@ class _DebtsSubView extends ConsumerWidget {
             const SizedBox(height: 10),
             OutlinedButton.icon(
               key: const Key('add_debt_button'),
-              onPressed: () => _showCreateDebtDialog(context, ref),
+              onPressed: () => _showCreateOrEditDebtDialog(context, ref),
               icon: const Icon(PhosphorIconsRegular.plus, size: 15),
               label: Text(
                 'Tambah Hutang / Piutang',
@@ -306,7 +414,14 @@ class _DebtsSubView extends ConsumerWidget {
               )
             else
               for (final debt in debts) ...[
-                _DebtCard(debt: debt),
+                _DebtCard(
+                  debt: debt,
+                  onEdit: () => _showCreateOrEditDebtDialog(
+                    context,
+                    ref,
+                    existingDebt: debt,
+                  ),
+                ),
                 const SizedBox(height: 10),
               ],
           ],
@@ -318,47 +433,119 @@ class _DebtsSubView extends ConsumerWidget {
 
 class _DebtCard extends ConsumerWidget {
   final LocalDebt debt;
+  final VoidCallback onEdit;
 
-  const _DebtCard({required this.debt});
+  const _DebtCard({
+    required this.debt,
+    required this.onEdit,
+  });
 
   Future<void> _showPartialPayDialog(BuildContext context, WidgetRef ref) async {
-    final amountCtrl =
-        TextEditingController(text: debt.remainingAmount.toString());
+    final amountCtrl = TextEditingController(
+      text: RupiahFormatter.formatNumberOnly(debt.remainingAmount),
+    );
+    String? errorText;
+
     await showDialog<void>(
       context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: Text('Bayar ${debt.counterpartyName}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Sisa kewajiban saat ini: ${RupiahFormatter.format(debt.remainingAmount)}',
+                style: SwissLedgerTypography.sans(
+                  fontSize: 12,
+                  color: SwissLedgerColors.textMuted,
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: amountCtrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: const [RupiahInputFormatter()],
+                decoration: const InputDecoration(
+                  labelText: 'Nominal Bayar (Rp)',
+                  prefixText: 'Rp ',
+                ),
+              ),
+              if (errorText != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  errorText!,
+                  style: SwissLedgerTypography.sans(
+                    fontSize: 12,
+                    color: SwissLedgerColors.dangerRed,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final amt = RupiahFormatter.parseDigits(amountCtrl.text);
+                if (amt <= 0 || amt > debt.remainingAmount) {
+                  setModalState(() {
+                    errorText =
+                        'Nominal bayar harus antara Rp 1 dan ${RupiahFormatter.format(debt.remainingAmount)}.';
+                  });
+                  return;
+                }
+                final repo = ref.read(debtRepositoryProvider);
+                if (repo == null) return;
+                final todayIso =
+                    DateTime.now().toIso8601String().substring(0, 10);
+                await repo.recordPayment(
+                  debtId: debt.id,
+                  amount: amt,
+                  paymentDate: todayIso,
+                  notes: 'Pembayaran kewajiban',
+                );
+                if (ctx.mounted) Navigator.of(ctx).pop();
+              },
+              child: const Text('Simpan Pembayaran'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmArchiveDebt(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Bayar ${debt.counterpartyName}'),
-        content: TextField(
-          controller: amountCtrl,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: 'Nominal Bayar (Rp)'),
+        title: const Text('Hapus Catatan Kewajiban'),
+        content: Text(
+          'Hapus catatan "${debt.counterpartyName}" dari daftar kewajiban aktif?',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Batal'),
           ),
           ElevatedButton(
-            onPressed: () async {
-              final amt = RupiahFormatter.parseDigits(amountCtrl.text);
-              if (amt <= 0 || amt > debt.remainingAmount) return;
-              final repo = ref.read(debtRepositoryProvider);
-              if (repo == null) return;
-              final todayIso =
-                  DateTime.now().toIso8601String().substring(0, 10);
-              await repo.recordPayment(
-                debtId: debt.id,
-                amount: amt,
-                paymentDate: todayIso,
-                notes: 'Pembayaran kewajiban',
-              );
-              if (ctx.mounted) Navigator.of(ctx).pop();
-            },
-            child: const Text('Simpan Pembayaran'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SwissLedgerColors.dangerRed,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Hapus'),
           ),
         ],
       ),
     );
+    if (confirmed != true) return;
+    final repo = ref.read(debtRepositoryProvider);
+    await repo?.archiveDebt(debt.id);
   }
 
   @override
@@ -421,6 +608,16 @@ class _DebtCard extends ConsumerWidget {
               ),
             ),
           ],
+          if (debt.dueDate != null && debt.dueDate!.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              'Jatuh tempo: ${RupiahFormatter.formatIsoDate(debt.dueDate!)}',
+              style: SwissLedgerTypography.sans(
+                fontSize: 11,
+                color: SwissLedgerColors.textMuted,
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -444,18 +641,44 @@ class _DebtCard extends ConsumerWidget {
                   ),
                 ],
               ),
-              if (debt.remainingAmount > 0)
-                OutlinedButton(
-                  onPressed: () => _showPartialPayDialog(context, ref),
-                  child: Text(
-                    'Bayar / Cicil',
-                    style: SwissLedgerTypography.sans(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: SwissLedgerColors.accentTeal,
+              Wrap(
+                spacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  IconButton(
+                    tooltip: 'Ubah',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: onEdit,
+                    icon: const Icon(
+                      PhosphorIconsRegular.pencilSimple,
+                      size: 16,
+                      color: SwissLedgerColors.textMuted,
                     ),
                   ),
-                ),
+                  IconButton(
+                    tooltip: 'Hapus',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _confirmArchiveDebt(context, ref),
+                    icon: const Icon(
+                      PhosphorIconsRegular.trash,
+                      size: 16,
+                      color: SwissLedgerColors.dangerRed,
+                    ),
+                  ),
+                  if (debt.remainingAmount > 0)
+                    OutlinedButton(
+                      onPressed: () => _showPartialPayDialog(context, ref),
+                      child: Text(
+                        'Bayar / Cicil',
+                        style: SwissLedgerTypography.sans(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: SwissLedgerColors.accentTeal,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ],
           ),
         ],
@@ -471,8 +694,9 @@ class _InstallmentsSubView extends ConsumerWidget {
 
   Future<void> _showCreatePlanDialog(BuildContext context, WidgetRef ref) async {
     final titleCtrl = TextEditingController();
-    final totalCtrl = TextEditingController(text: '6000000');
+    final totalCtrl = TextEditingController(text: '6.000.000');
     final countCtrl = TextEditingController(text: '7');
+    String? errorText;
 
     await showDialog<void>(
       context: context,
@@ -500,21 +724,25 @@ class _InstallmentsSubView extends ConsumerWidget {
                     controller: titleCtrl,
                     decoration: const InputDecoration(labelText: 'Nama Cicilan'),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   TextField(
                     controller: totalCtrl,
                     keyboardType: TextInputType.number,
+                    inputFormatters: const [RupiahInputFormatter()],
                     onChanged: (_) => setModalState(() {}),
-                    decoration:
-                        const InputDecoration(labelText: 'Total Nominal (Rp)'),
+                    decoration: const InputDecoration(
+                      labelText: 'Total Nominal (Rp)',
+                      prefixText: 'Rp ',
+                    ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   TextField(
                     controller: countCtrl,
                     keyboardType: TextInputType.number,
                     onChanged: (_) => setModalState(() {}),
                     decoration: const InputDecoration(
-                        labelText: 'Jumlah Termin (contoh: 7)'),
+                      labelText: 'Jumlah Termin (contoh: 7)',
+                    ),
                   ),
                   if (preview.isNotEmpty) ...[
                     const SizedBox(height: 10),
@@ -523,6 +751,16 @@ class _InstallmentsSubView extends ConsumerWidget {
                       style: SwissLedgerTypography.monoTabular(
                         fontSize: 11,
                         color: SwissLedgerColors.accentTeal,
+                      ),
+                    ),
+                  ],
+                  if (errorText != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      errorText!,
+                      style: SwissLedgerTypography.sans(
+                        fontSize: 12,
+                        color: SwissLedgerColors.dangerRed,
                       ),
                     ),
                   ],
@@ -537,6 +775,10 @@ class _InstallmentsSubView extends ConsumerWidget {
               ElevatedButton(
                 onPressed: () async {
                   if (total <= 0 || count <= 0 || titleCtrl.text.trim().isEmpty) {
+                    setModalState(() {
+                      errorText =
+                          'Nama cicilan, total nominal, dan jumlah termin wajib diisi.';
+                    });
                     return;
                   }
                   final repo = ref.read(installmentRepositoryProvider);
@@ -642,6 +884,117 @@ class _InstallmentPlanCard extends ConsumerWidget {
   final _PlanWithTerms item;
 
   const _InstallmentPlanCard({required this.item});
+
+  Future<void> _showEditPlanDialog(BuildContext context, WidgetRef ref) async {
+    final titleCtrl = TextEditingController(text: item.plan.title);
+    final vendorCtrl = TextEditingController(text: item.plan.vendorName ?? '');
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Ubah Rencana Cicilan'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleCtrl,
+              decoration: const InputDecoration(labelText: 'Nama Cicilan'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: vendorCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Nama Toko / Penyedia (Opsional)',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final title = titleCtrl.text.trim();
+              if (title.isEmpty) return;
+              final repo = ref.read(installmentRepositoryProvider);
+              await repo?.updatePlan(
+                planId: item.plan.id,
+                title: title,
+                vendorName: vendorCtrl.text.trim().isEmpty
+                    ? null
+                    : vendorCtrl.text.trim(),
+              );
+              if (ctx.mounted) Navigator.of(ctx).pop();
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmArchivePlan(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Hapus Rencana Cicilan'),
+        content: Text('Hapus rencana cicilan "${item.plan.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SwissLedgerColors.dangerRed,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final repo = ref.read(installmentRepositoryProvider);
+    await repo?.archivePlan(item.plan.id);
+  }
+
+  Future<void> _confirmPayTerm(
+    BuildContext context,
+    WidgetRef ref,
+    LocalInstallment nextTerm,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Bayar Termin #${nextTerm.installmentNumber}'),
+        content: Text(
+          'Catat pembayaran "${item.plan.title} #${nextTerm.installmentNumber}" sebesar ${RupiahFormatter.format(nextTerm.remainingAmount)}? Saldo kas akan otomatis berkurang.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Ya, Bayar Sekarang'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final repo = ref.read(installmentRepositoryProvider);
+    if (repo == null) return;
+    final todayIso = DateTime.now().toIso8601String().substring(0, 10);
+    await repo.recordPayment(
+      installmentId: nextTerm.id,
+      amount: nextTerm.remainingAmount,
+      paymentDate: todayIso,
+    );
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -750,7 +1103,7 @@ class _InstallmentPlanCard extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        'TERMIN #${nextTerm.installmentNumber} (${nextTerm.dueDate})',
+                        'TERMIN #${nextTerm.installmentNumber} (${RupiahFormatter.formatIsoDate(nextTerm.dueDate)})',
                         overflow: TextOverflow.ellipsis,
                         style: SwissLedgerTypography.sans(
                           fontSize: 10,
@@ -771,33 +1124,46 @@ class _InstallmentPlanCard extends ConsumerWidget {
                 ),
             ],
           ),
-          if (nextTerm != null) ...[
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton(
-                onPressed: () async {
-                  final repo = ref.read(installmentRepositoryProvider);
-                  if (repo == null) return;
-                  final todayIso =
-                      DateTime.now().toIso8601String().substring(0, 10);
-                  await repo.recordPayment(
-                    installmentId: nextTerm.id,
-                    amount: nextTerm.remainingAmount,
-                    paymentDate: todayIso,
-                  );
-                },
-                child: Text(
-                  'Bayar Termin #${nextTerm.installmentNumber}',
-                  style: SwissLedgerTypography.sans(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: SwissLedgerColors.accentTeal,
-                  ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                tooltip: 'Ubah Cicilan',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _showEditPlanDialog(context, ref),
+                icon: const Icon(
+                  PhosphorIconsRegular.pencilSimple,
+                  size: 16,
+                  color: SwissLedgerColors.textMuted,
                 ),
               ),
-            ),
-          ],
+              IconButton(
+                tooltip: 'Hapus Cicilan',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _confirmArchivePlan(context, ref),
+                icon: const Icon(
+                  PhosphorIconsRegular.trash,
+                  size: 16,
+                  color: SwissLedgerColors.dangerRed,
+                ),
+              ),
+              if (nextTerm != null) ...[
+                const SizedBox(width: 6),
+                OutlinedButton(
+                  onPressed: () => _confirmPayTerm(context, ref, nextTerm),
+                  child: Text(
+                    'Bayar Termin #${nextTerm.installmentNumber}',
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: SwissLedgerColors.accentTeal,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ],
       ),
     );

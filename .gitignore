@@ -1,5 +1,6 @@
 # Workspace & Agent Tools
 .superpowers/
+.impeccable/
 tools/
 
 # Environment & Secrets

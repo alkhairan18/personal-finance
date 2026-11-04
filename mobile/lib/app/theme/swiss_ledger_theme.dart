@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class PhosphorIconsRegular {
   const PhosphorIconsRegular._();
@@ -16,7 +17,7 @@ class PhosphorIconsRegular {
   static const IconData briefcase = Icons.work_outline;
   static const IconData arrowDownLeft = Icons.south_west_outlined;
   static const IconData receipt = Icons.receipt_long_outlined;
-  static const IconData bookBookmark = Icons.menu_book_outlined;
+  static const IconData bookBookmark = Icons.collections_bookmark_outlined;
   static const IconData userCircle = Icons.account_circle_outlined;
   static const IconData slidersHorizontal = Icons.tune_outlined;
   static const IconData backspace = Icons.backspace_outlined;
@@ -32,6 +33,10 @@ class PhosphorIconsRegular {
   static const IconData checkCircle = Icons.check_circle_outline;
   static const IconData arrowsClockwise = Icons.sync_outlined;
   static const IconData calendarBlank = Icons.calendar_today_outlined;
+  static const IconData pencilSimple = Icons.edit_outlined;
+  static const IconData trash = Icons.delete_outline;
+  static const IconData xCircle = Icons.cancel_outlined;
+  static const IconData caretRight = Icons.chevron_right_outlined;
 }
 
 class SwissLedgerColors {
@@ -62,13 +67,21 @@ class SwissLedgerColors {
 class SwissLedgerTypography {
   const SwissLedgerTypography._();
 
+  static bool get _isTestBinding {
+    try {
+      return WidgetsBinding.instance.runtimeType.toString().contains('Test');
+    } catch (_) {
+      return true;
+    }
+  }
+
   static TextStyle monoTabular({
     double fontSize = 14,
     FontWeight fontWeight = FontWeight.w600,
     Color color = SwissLedgerColors.textPrimary,
     double? letterSpacing,
   }) {
-    return TextStyle(
+    final baseStyle = TextStyle(
       fontFamily: 'JetBrains Mono',
       fontFamilyFallback: const ['Consolas', 'monospace'],
       fontSize: fontSize,
@@ -76,6 +89,12 @@ class SwissLedgerTypography {
       color: color,
       letterSpacing: letterSpacing ?? -0.2,
       fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    if (_isTestBinding) {
+      return baseStyle;
+    }
+    return GoogleFonts.jetBrainsMono(
+      textStyle: baseStyle,
     );
   }
 
@@ -86,7 +105,7 @@ class SwissLedgerTypography {
     double? letterSpacing,
     double? height,
   }) {
-    return TextStyle(
+    final baseStyle = TextStyle(
       fontFamily: 'Plus Jakarta Sans',
       fontFamilyFallback: const ['Segoe UI', 'Roboto', 'sans-serif'],
       fontSize: fontSize,
@@ -94,6 +113,12 @@ class SwissLedgerTypography {
       color: color,
       letterSpacing: letterSpacing,
       height: height,
+    );
+    if (_isTestBinding) {
+      return baseStyle;
+    }
+    return GoogleFonts.plusJakartaSans(
+      textStyle: baseStyle,
     );
   }
 }
@@ -163,6 +188,92 @@ class SwissLedgerTheme {
             color: SwissLedgerColors.borderHairline,
             width: 1,
           ),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: SwissLedgerColors.surfaceElevated,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(
+            color: SwissLedgerColors.borderHairline,
+            width: 1,
+          ),
+        ),
+        titleTextStyle: SwissLedgerTypography.sans(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: SwissLedgerColors.textPrimary,
+        ),
+        contentTextStyle: SwissLedgerTypography.sans(
+          fontSize: 13,
+          color: SwissLedgerColors.textPrimary,
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        isDense: true,
+        filled: true,
+        fillColor: SwissLedgerColors.bgPrimary,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 11,
+        ),
+        labelStyle: SwissLedgerTypography.sans(
+          fontSize: 12,
+          color: SwissLedgerColors.textMuted,
+        ),
+        hintStyle: SwissLedgerTypography.sans(
+          fontSize: 12,
+          color: SwissLedgerColors.textMuted,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(
+            color: SwissLedgerColors.borderHairline,
+            width: 1,
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(
+            color: SwissLedgerColors.borderHairline,
+            width: 1,
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(
+            color: SwissLedgerColors.accentTeal,
+            width: 1.5,
+          ),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(
+            color: SwissLedgerColors.dangerRed,
+            width: 1,
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: SwissLedgerColors.textPrimary,
+          side: const BorderSide(color: SwissLedgerColors.borderHairline),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: SwissLedgerColors.accentTeal,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
         ),
       ),
       appBarTheme: const AppBarTheme(

@@ -4,6 +4,7 @@ import 'package:personal_finance/app/providers/app_providers.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/core/money/rupiah_formatter.dart';
+import 'package:personal_finance/features/transactions/presentation/quick_add_transaction_sheet.dart';
 
 class BukuKasScreen extends ConsumerWidget {
   const BukuKasScreen({super.key});
@@ -22,65 +23,118 @@ class BukuKasScreen extends ConsumerWidget {
     LocalTransaction tx,
   ) async {
     final titleCtrl = TextEditingController(text: tx.title ?? '');
-    final amountCtrl = TextEditingController(text: tx.amount.toString());
+    final amountCtrl = TextEditingController(
+      text: RupiahFormatter.formatNumberOnly(tx.amount),
+    );
     final dateCtrl = TextEditingController(text: tx.transactionDate);
+    String? errorText;
 
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Ubah Transaksi'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              key: const Key('edit_tx_title_input'),
-              controller: titleCtrl,
-              decoration: const InputDecoration(labelText: 'Catatan / Judul'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: const Text('Ubah Transaksi'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  key: const Key('edit_tx_title_input'),
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Catatan / Judul',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const Key('edit_tx_amount_input'),
+                  controller: amountCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: const [RupiahInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: 'Nominal (Rp)',
+                    prefixText: 'Rp ',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const Key('edit_tx_date_input'),
+                  controller: dateCtrl,
+                  readOnly: false,
+                  decoration: InputDecoration(
+                    labelText: 'Tanggal Transaksi',
+                    suffixIcon: IconButton(
+                      icon: const Icon(
+                        PhosphorIconsRegular.calendarBlank,
+                        size: 16,
+                      ),
+                      onPressed: () async {
+                        final initial =
+                            DateTime.tryParse(dateCtrl.text.trim()) ??
+                            DateTime.now();
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: initial,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2100),
+                        );
+                        if (picked != null) {
+                          setModalState(() {
+                            dateCtrl.text = picked
+                                .toIso8601String()
+                                .substring(0, 10);
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    errorText!,
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 12,
+                      color: SwissLedgerColors.dangerRed,
+                    ),
+                  ),
+                ],
+              ],
             ),
-            TextField(
-              key: const Key('edit_tx_amount_input'),
-              controller: amountCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Nominal (Rp)'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Batal'),
             ),
-            TextField(
-              key: const Key('edit_tx_date_input'),
-              controller: dateCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Tanggal (YYYY-MM-DD)',
-              ),
+            ElevatedButton(
+              key: const Key('save_edit_tx_button'),
+              onPressed: () async {
+                final repo = ref.read(transactionRepositoryProvider);
+                final amount = RupiahFormatter.parseDigits(amountCtrl.text);
+                final dateText = dateCtrl.text.trim();
+                if (repo == null || amount <= 0 || dateText.isEmpty) {
+                  setModalState(() {
+                    errorText =
+                        'Nominal harus lebih dari Rp 0 dan tanggal wajib diisi.';
+                  });
+                  return;
+                }
+                await repo.updateTransaction(
+                  transactionId: tx.id,
+                  amount: amount,
+                  transactionDate: dateText,
+                  title: titleCtrl.text.trim().isEmpty
+                      ? null
+                      : titleCtrl.text.trim(),
+                );
+                if (ctx.mounted) Navigator.of(ctx).pop();
+              },
+              child: const Text('Simpan'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Batal'),
-          ),
-          ElevatedButton(
-            key: const Key('save_edit_tx_button'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: SwissLedgerColors.accentTeal,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () async {
-              final repo = ref.read(transactionRepositoryProvider);
-              final amount = RupiahFormatter.parseDigits(amountCtrl.text);
-              final dateText = dateCtrl.text.trim();
-              if (repo == null || amount <= 0 || dateText.isEmpty) return;
-              await repo.updateTransaction(
-                transactionId: tx.id,
-                amount: amount,
-                transactionDate: dateText,
-                title: titleCtrl.text.trim().isEmpty
-                    ? null
-                    : titleCtrl.text.trim(),
-              );
-              if (ctx.mounted) Navigator.of(ctx).pop();
-            },
-            child: const Text('Simpan'),
-          ),
-        ],
       ),
     );
   }
@@ -124,6 +178,115 @@ class BukuKasScreen extends ConsumerWidget {
     );
   }
 
+  Future<void> _showTransactionActionSheet(
+    BuildContext context,
+    WidgetRef ref,
+    LocalTransaction tx,
+    LocalCategory? category,
+  ) async {
+    final isIncome = tx.type == 'income';
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        decoration: const BoxDecoration(
+          color: SwissLedgerColors.surfaceElevated,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+          border: Border(
+            top: BorderSide(color: SwissLedgerColors.borderHairline, width: 1),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: SwissLedgerColors.borderHairline,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                tx.title ?? category?.name ?? 'Transaksi',
+                style: SwissLedgerTypography.sans(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${category?.name ?? 'Umum'} · ${RupiahFormatter.formatIsoDate(tx.transactionDate)}',
+                style: SwissLedgerTypography.sans(
+                  fontSize: 12,
+                  color: SwissLedgerColors.textMuted,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                isIncome
+                    ? '+${RupiahFormatter.format(tx.amount)}'
+                    : '-${RupiahFormatter.format(tx.amount)}',
+                style: SwissLedgerTypography.monoTabular(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: isIncome
+                      ? SwissLedgerColors.accentTeal
+                      : SwissLedgerColors.dangerRed,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  if (tx.sourceType == 'manual') ...[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _showEditTransactionDialog(context, ref, tx);
+                        },
+                        icon: const Icon(
+                          PhosphorIconsRegular.pencilSimple,
+                          size: 16,
+                        ),
+                        label: const Text('Ubah Transaksi'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: SwissLedgerColors.dangerRed,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _confirmAndReverseTransaction(context, ref, tx);
+                      },
+                      icon: const Icon(
+                        PhosphorIconsRegular.arrowsClockwise,
+                        size: 16,
+                      ),
+                      label: const Text('Koreksi Jurnal'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final db = ref.watch(activeDatabaseProvider);
@@ -157,6 +320,10 @@ class BukuKasScreen extends ConsumerWidget {
         }).toList();
 
         final categoryList = data.categoriesById.values.toList();
+        final totalActiveDebtAmount = data.activeDebts.fold<int>(
+          0,
+          (sum, d) => sum + d.remainingAmount,
+        );
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -199,23 +366,23 @@ class BukuKasScreen extends ConsumerWidget {
                               ref.read(selectedMonthProvider.notifier).state =
                                   _shiftMonth(selectedMonth, -1);
                             },
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(6),
                             child: const Padding(
                               padding: EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
+                                horizontal: 8,
+                                vertical: 4,
                               ),
                               child: Icon(
                                 Icons.chevron_left,
-                                size: 16,
-                                color: SwissLedgerColors.textMuted,
+                                size: 18,
+                                color: SwissLedgerColors.textPrimary,
                               ),
                             ),
                           ),
                           Text(
-                            selectedMonth,
-                            style: SwissLedgerTypography.monoTabular(
-                              fontSize: 11,
+                            RupiahFormatter.formatMonthYear(selectedMonth),
+                            style: SwissLedgerTypography.sans(
+                              fontSize: 12,
                               fontWeight: FontWeight.w700,
                               color: SwissLedgerColors.textPrimary,
                             ),
@@ -226,16 +393,16 @@ class BukuKasScreen extends ConsumerWidget {
                               ref.read(selectedMonthProvider.notifier).state =
                                   _shiftMonth(selectedMonth, 1);
                             },
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(6),
                             child: const Padding(
                               padding: EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
+                                horizontal: 8,
+                                vertical: 4,
                               ),
                               child: Icon(
                                 Icons.chevron_right,
-                                size: 16,
-                                color: SwissLedgerColors.textMuted,
+                                size: 18,
+                                color: SwissLedgerColors.textPrimary,
                               ),
                             ),
                           ),
@@ -302,7 +469,7 @@ class BukuKasScreen extends ConsumerWidget {
                               style: SwissLedgerTypography.monoTabular(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
-                                color: SwissLedgerColors.textPrimary,
+                                color: SwissLedgerColors.dangerRed,
                               ),
                             ),
                           ],
@@ -334,7 +501,9 @@ class BukuKasScreen extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'KEWAJIBAN AKTIF (${data.activeDebts.first.counterpartyName})',
+                            data.activeDebts.length == 1
+                                ? 'KEWAJIBAN AKTIF (${data.activeDebts.first.counterpartyName})'
+                                : '${data.activeDebts.length} KEWAJIBAN AKTIF (${data.activeDebts.first.counterpartyName}, dll.)',
                             style: SwissLedgerTypography.sans(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
@@ -344,7 +513,9 @@ class BukuKasScreen extends ConsumerWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            data.activeDebts.first.title ?? 'Hutang / Piutang',
+                            data.activeDebts.length == 1
+                                ? (data.activeDebts.first.title ?? 'Hutang / Piutang')
+                                : 'Total sisa kewajiban aktif berjalan',
                             style: SwissLedgerTypography.sans(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
@@ -354,7 +525,7 @@ class BukuKasScreen extends ConsumerWidget {
                       ),
                     ),
                     Text(
-                      RupiahFormatter.format(data.activeDebts.first.remainingAmount),
+                      RupiahFormatter.format(totalActiveDebtAmount),
                       style: SwissLedgerTypography.monoTabular(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
@@ -379,6 +550,17 @@ class BukuKasScreen extends ConsumerWidget {
                   size: 16,
                   color: SwissLedgerColors.textMuted,
                 ),
+                suffixIcon: searchQuery.trim().isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(
+                          PhosphorIconsRegular.xCircle,
+                          size: 16,
+                          color: SwissLedgerColors.textMuted,
+                        ),
+                        onPressed: () =>
+                            ref.read(searchQueryProvider.notifier).state = '',
+                      )
+                    : null,
                 isDense: true,
                 filled: true,
                 fillColor: SwissLedgerColors.surfaceElevated,
@@ -404,7 +586,7 @@ class BukuKasScreen extends ConsumerWidget {
             if (categoryList.isNotEmpty) ...[
               const SizedBox(height: 10),
               SizedBox(
-                height: 32,
+                height: 34,
                 child: ListView(
                   scrollDirection: Axis.horizontal,
                   children: [
@@ -485,6 +667,29 @@ class BukuKasScreen extends ConsumerWidget {
                               color: SwissLedgerColors.textMuted,
                             ),
                           ),
+                          const SizedBox(height: 12),
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              showModalBottomSheet<bool>(
+                                context: context,
+                                isScrollControlled: true,
+                                backgroundColor: Colors.transparent,
+                                builder: (_) =>
+                                    const QuickAddTransactionSheet(),
+                              );
+                            },
+                            icon: const Icon(
+                              PhosphorIconsRegular.plus,
+                              size: 14,
+                            ),
+                            label: Text(
+                              'Catat Transaksi Pertama',
+                              style: SwissLedgerTypography.sans(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     )
@@ -498,6 +703,12 @@ class BukuKasScreen extends ConsumerWidget {
                             ),
                           _LedgerTransactionRow(
                             tx: filteredTxs[i],
+                            onTapRow: () => _showTransactionActionSheet(
+                              context,
+                              ref,
+                              filteredTxs[i],
+                              data.categoriesById[filteredTxs[i].categoryId],
+                            ),
                             onEdit: filteredTxs[i].sourceType == 'manual'
                                 ? () => _showEditTransactionDialog(
                                     context,
@@ -613,12 +824,14 @@ class _LedgerTransactionRow extends StatelessWidget {
   final LocalCategory? category;
   final VoidCallback onReverse;
   final VoidCallback? onEdit;
+  final VoidCallback? onTapRow;
 
   const _LedgerTransactionRow({
     required this.tx,
     required this.category,
     required this.onReverse,
     this.onEdit,
+    this.onTapRow,
   });
 
   @override
@@ -628,93 +841,121 @@ class _LedgerTransactionRow extends StatelessWidget {
         ? '+${RupiahFormatter.format(tx.amount)}'
         : '-${RupiahFormatter.format(tx.amount)}';
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: SwissLedgerColors.surfaceSubtle,
-              borderRadius: BorderRadius.circular(8),
+    return InkWell(
+      onTap: onTapRow,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: SwissLedgerColors.surfaceSubtle,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                CategoryIconMapper.fromKey(category?.iconKey ?? 'receipt'),
+                size: 17,
+                color: SwissLedgerColors.textPrimary,
+              ),
             ),
-            child: Icon(
-              CategoryIconMapper.fromKey(category?.iconKey ?? 'receipt'),
-              size: 16,
-              color: SwissLedgerColors.textPrimary,
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    tx.title ?? category?.name ?? 'Transaksi',
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: SwissLedgerColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${category?.name ?? 'Umum'} · ${RupiahFormatter.formatIsoDate(tx.transactionDate)}',
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 11,
+                      color: SwissLedgerColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  tx.title ?? category?.name ?? 'Transaksi',
-                  style: SwissLedgerTypography.sans(
+                  signedAmount,
+                  style: SwissLedgerTypography.monoTabular(
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: SwissLedgerColors.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    color: isIncome
+                        ? SwissLedgerColors.accentTeal
+                        : SwissLedgerColors.dangerRed,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '${category?.name ?? 'Umum'} · ${tx.transactionDate}',
-                  style: SwissLedgerTypography.sans(
-                    fontSize: 11,
-                    color: SwissLedgerColors.textMuted,
-                  ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (onEdit != null) ...[
+                      InkWell(
+                        key: Key('edit_tx_${tx.id}'),
+                        onTap: onEdit,
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: SwissLedgerColors.accentTealSubtle,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            'Ubah',
+                            style: SwissLedgerTypography.sans(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: SwissLedgerColors.accentTeal,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    InkWell(
+                      key: Key('reverse_tx_${tx.id}'),
+                      onTap: onReverse,
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: SwissLedgerColors.surfaceSubtle,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'Koreksi',
+                          style: SwissLedgerTypography.sans(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: SwissLedgerColors.textMuted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                signedAmount,
-                style: SwissLedgerTypography.monoTabular(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: isIncome
-                      ? SwissLedgerColors.accentTeal
-                      : SwissLedgerColors.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 2),
-              InkWell(
-                key: Key('edit_tx_${tx.id}'),
-                onTap: onEdit,
-                child: onEdit != null
-                    ? Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: Text(
-                          'Ubah',
-                          style: SwissLedgerTypography.sans(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: SwissLedgerColors.accentTeal,
-                          ),
-                        ),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              InkWell(
-                key: Key('reverse_tx_${tx.id}'),
-                onTap: onReverse,
-                child: Text(
-                  'Koreksi',
-                  style: SwissLedgerTypography.sans(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: SwissLedgerColors.textMuted,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

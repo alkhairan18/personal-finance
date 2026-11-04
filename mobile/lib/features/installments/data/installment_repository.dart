@@ -107,6 +107,89 @@ class InstallmentRepository {
     return planId;
   }
 
+  Future<void> updatePlan({
+    required String planId,
+    required String title,
+    String? vendorName,
+  }) async {
+    final rows = db.select(
+      'SELECT * FROM local_installment_plans WHERE id = ? AND user_id = ? LIMIT 1',
+      [planId, db.userId],
+    );
+    if (rows.isEmpty) return;
+    final current = LocalInstallmentPlan.fromRow(rows.first);
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_installment_plans
+        SET title = ?, vendor_name = ?, version = version + 1, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ? AND user_id = ?
+        ''',
+        [title, vendorName, nowIso, planId, db.userId],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'installment_plan',
+        entityId: planId,
+        operationType: 'update',
+        baseVersion: current.version,
+        payload: {
+          'title': title,
+          'vendor_name': vendorName,
+          'total_amount': current.totalAmount,
+          'installment_count': current.installmentCount,
+          'frequency': current.frequency,
+          'start_date': current.startDate,
+          'status': current.status,
+        },
+      );
+    });
+  }
+
+  Future<void> archivePlan(String planId) async {
+    final rows = db.select(
+      'SELECT * FROM local_installment_plans WHERE id = ? AND user_id = ? LIMIT 1',
+      [planId, db.userId],
+    );
+    if (rows.isEmpty) return;
+    final current = LocalInstallmentPlan.fromRow(rows.first);
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_installment_plans
+        SET status = 'archived', version = version + 1, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ? AND user_id = ?
+        ''',
+        [nowIso, planId, db.userId],
+      );
+
+      db.execute(
+        '''
+        UPDATE local_installments
+        SET status = 'archived', updated_at = ?
+        WHERE plan_id = ? AND user_id = ?
+        ''',
+        [nowIso, planId, db.userId],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'installment_plan',
+        entityId: planId,
+        operationType: 'archive',
+        baseVersion: current.version,
+        payload: {'id': planId, 'status': 'archived'},
+      );
+    });
+  }
+
   Future<String> recordPayment({
     required String installmentId,
     required int amount,

@@ -156,6 +156,53 @@ class ReportsAndMoreScreen extends ConsumerWidget {
     }
   }
 
+  String _formatConflictEntityLabel(String entityType) {
+    switch (entityType) {
+      case 'transactions':
+        return 'Transaksi';
+      case 'debts':
+        return 'Hutang / Piutang';
+      case 'installment_plans':
+        return 'Rencana Cicilan';
+      case 'installments':
+        return 'Termin Cicilan';
+      case 'wishlist':
+        return 'Wishlist';
+      case 'categories':
+        return 'Kategori';
+      default:
+        return entityType;
+    }
+  }
+
+  String _describePayload(Map<String, dynamic> decoded) {
+    final title = (decoded['title'] ??
+            decoded['item_name'] ??
+            decoded['counterparty_name'] ??
+            decoded['name'] ??
+            '')
+        .toString()
+        .trim();
+    final rawAmount = decoded['amount'] ??
+        decoded['remaining_amount'] ??
+        decoded['saved_amount'] ??
+        decoded['target_amount'] ??
+        decoded['principal_amount'] ??
+        decoded['total_amount'];
+    final amountInt = rawAmount is num
+        ? rawAmount.toInt()
+        : int.tryParse(rawAmount?.toString() ?? '');
+
+    if (title.isNotEmpty && amountInt != null) {
+      return '$title · ${RupiahFormatter.format(amountInt)}';
+    } else if (title.isNotEmpty) {
+      return title;
+    } else if (amountInt != null) {
+      return RupiahFormatter.format(amountInt);
+    }
+    return 'Data Pembaruan';
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final db = ref.watch(activeDatabaseProvider);
@@ -174,6 +221,8 @@ class ReportsAndMoreScreen extends ConsumerWidget {
         if (data == null) {
           return const Center(child: CircularProgressIndicator());
         }
+
+        final formattedPeriod = RupiahFormatter.formatMonthYear(selectedMonth);
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -225,7 +274,7 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                     ),
                     icon: const Icon(PhosphorIconsRegular.filePdf, size: 16),
                     label: Text(
-                      'Unduh Laporan PDF ($selectedMonth)',
+                      'Unduh Laporan PDF ($formattedPeriod)',
                       style: SwissLedgerTypography.sans(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
@@ -354,38 +403,83 @@ class ReportsAndMoreScreen extends ConsumerWidget {
                         color: SwissLedgerColors.warningAmber,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 10),
                     for (final c in data.conflicts)
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '${c.entityType} (${c.entityId.length >= 8 ? c.entityId.substring(0, 8) : c.entityId})',
-                              style: SwissLedgerTypography.monoTabular(
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: SwissLedgerColors.surfaceElevated,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: SwissLedgerColors.borderHairline,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _formatConflictEntityLabel(c.entityType),
+                              style: SwissLedgerTypography.sans(
                                 fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: SwissLedgerColors.warningAmber,
                               ),
                             ),
-                          ),
-                          TextButton(
-                            onPressed: () async {
-                              final syncEngine = ref.read(syncEngineProvider);
-                              if (syncEngine != null) {
-                                await syncEngine.resolveConflictUseLocal(c.id);
-                              }
-                            },
-                            child: const Text('Gunakan Lokal'),
-                          ),
-                          TextButton(
-                            onPressed: () async {
-                              final syncEngine = ref.read(syncEngineProvider);
-                              if (syncEngine != null) {
-                                await syncEngine.resolveConflictUseServer(c.id);
-                              }
-                            },
-                            child: const Text('Gunakan Server'),
-                          ),
-                        ],
+                            const SizedBox(height: 4),
+                            Text(
+                              'Versi Perangkat: ${_describePayload(c.localPayload)}',
+                              style: SwissLedgerTypography.sans(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: SwissLedgerColors.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Versi Server: ${_describePayload(c.serverPayload)}',
+                              style: SwissLedgerTypography.sans(
+                                fontSize: 12,
+                                color: SwissLedgerColors.textMuted,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                OutlinedButton(
+                                  onPressed: () async {
+                                    final syncEngine =
+                                        ref.read(syncEngineProvider);
+                                    if (syncEngine != null) {
+                                      await syncEngine
+                                          .resolveConflictUseLocal(c.id);
+                                    }
+                                  },
+                                  style: OutlinedButton.styleFrom(
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                  child: const Text('Gunakan Lokal'),
+                                ),
+                                const SizedBox(width: 8),
+                                ElevatedButton(
+                                  onPressed: () async {
+                                    final syncEngine =
+                                        ref.read(syncEngineProvider);
+                                    if (syncEngine != null) {
+                                      await syncEngine
+                                          .resolveConflictUseServer(c.id);
+                                    }
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                  child: const Text('Gunakan Server'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                   ],
                 ),

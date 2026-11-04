@@ -122,6 +122,81 @@ class WishlistRepository {
     });
   }
 
+  Future<void> updateWishlistItem({
+    required String wishlistId,
+    required String itemName,
+    required int targetAmount,
+    required String priority,
+  }) async {
+    final item = await db.getWishlistById(wishlistId);
+    if (item == null) return;
+    if (targetAmount <= 0) {
+      throw ArgumentError('targetAmount must be greater than zero');
+    }
+
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final newStatus = item.status == 'purchased'
+        ? 'purchased'
+        : (item.savedAmount >= targetAmount
+            ? 'ready_to_buy'
+            : (item.savedAmount > 0 ? 'saving' : 'planned'));
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_wishlists
+        SET item_name = ?, target_amount = ?, priority = ?, status = ?, version = version + 1, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ? AND user_id = ?
+        ''',
+        [itemName, targetAmount, priority, newStatus, nowIso, wishlistId, db.userId],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'wishlist',
+        entityId: wishlistId,
+        operationType: 'update',
+        baseVersion: item.version,
+        payload: {
+          'item_name': itemName,
+          'target_amount': targetAmount,
+          'saved_amount': item.savedAmount,
+          'priority': priority,
+          'target_date': item.targetDate,
+          'status': newStatus,
+        },
+      );
+    });
+  }
+
+  Future<void> archiveWishlistItem(String wishlistId) async {
+    final item = await db.getWishlistById(wishlistId);
+    if (item == null) return;
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_wishlists
+        SET status = 'archived', version = version + 1, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ? AND user_id = ?
+        ''',
+        [nowIso, wishlistId, db.userId],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'wishlist',
+        entityId: wishlistId,
+        operationType: 'archive',
+        baseVersion: item.version,
+        payload: {'id': wishlistId, 'status': 'archived'},
+      );
+    });
+  }
+
   Future<void> markPurchased(String wishlistId) async {
     final item = await db.getWishlistById(wishlistId);
     if (item == null) return;
