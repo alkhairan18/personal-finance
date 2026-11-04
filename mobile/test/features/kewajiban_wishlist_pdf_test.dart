@@ -41,7 +41,7 @@ void main() {
   });
 
   testWidgets(
-    '7-term installment plan renders in Kewajiban tab, supports partial payment, and Wishlist filter chips & budgets work',
+    '7-term installment plan renders in Kewajiban tab, supports partial payment, and Wishlist filter chips, budgets, analytics & settings work',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(430, 932));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -169,11 +169,28 @@ void main() {
 
       final updatedWishlist = await db.getWishlistById(savingItemId);
       expect(updatedWishlist!.savedAmount, 500000);
+
+      // Navigate to Laporan & Lainnya tab
+      await tester.tap(find.byKey(const Key('nav_tab_laporan')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('ANALITIK PENGELUARAN & METODE PEMBAYARAN'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('manage_categories_button')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('manage_profile_button')),
+        findsOneWidget,
+      );
     },
   );
 
   test(
-    'PdfReportGenerator.generatePeriodReport produces valid %PDF- bytes offline and BackupExportService exports and restores valid JSON',
+    'PdfReportGenerator.generatePeriodReport produces valid %PDF- bytes offline with emoji sanitization and BackupExportService exports and restores valid JSON including budgets',
     () async {
       final cats = await db.getActiveCategories(kind: 'expense');
       await txRepo.createTransaction(
@@ -181,7 +198,13 @@ void main() {
         amount: 125000,
         categoryId: cats.first.id,
         transactionDate: '2026-10-17',
-        title: 'Makan Siang Tim',
+        title: 'Makan Siang Tim 🍜 — QRIS',
+        notes: '[Metode: QRIS / E-Wallet] Warung Padang',
+      );
+      await budgetRepo.upsertBudget(
+        categoryId: cats.first.id,
+        periodMonth: '2026-10',
+        limitAmount: 500000,
       );
       await debtRepo.createDebt(
         direction: 'payable',
@@ -192,9 +215,14 @@ void main() {
         title: 'Pinjaman Darurat',
       );
 
+      expect(
+        PdfReportGenerator.sanitizePdfText('Makan Siang Tim 🍜 — QRIS · Tunai'),
+        'Makan Siang Tim - QRIS | Tunai',
+      );
+
       final pdfBytes = await PdfReportGenerator.generatePeriodReport(
         db: db,
-        accountDisplayName: 'Anzhel',
+        accountDisplayName: 'Anzhel ✨',
         periodLabel: '2026-10',
       );
 
@@ -207,12 +235,14 @@ void main() {
       expect(decoded['user_id'], 'user-anzhel-uuid');
       expect((decoded['transactions'] as List).length, 1);
       expect((decoded['debts'] as List).length, 1);
+      expect((decoded['budgets'] as List).length, 1);
 
       final restoredDb = AppDatabase.inMemory(userId: 'user-anzhel-uuid');
       await restoredDb.ensureDefaultCategoriesSeeded();
       await BackupExportService.restoreFromJsonString(restoredDb, backupJson);
       expect((await restoredDb.getActiveTransactions()).length, 1);
       expect((await restoredDb.getActiveDebts()).length, 1);
+      expect((await restoredDb.getActiveBudgets(periodMonth: '2026-10')).length, 1);
       await restoredDb.close();
     },
   );

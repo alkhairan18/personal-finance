@@ -516,7 +516,7 @@ class _DebtCard extends ConsumerWidget {
                   child: ListView.separated(
                     shrinkWrap: true,
                     itemCount: payments.length,
-                    separatorBuilder: (_, __) => const Divider(
+                    separatorBuilder: (_, _) => const Divider(
                       height: 1,
                       color: SwissLedgerColors.borderHairline,
                     ),
@@ -1168,7 +1168,7 @@ class _InstallmentPlanCard extends ConsumerWidget {
                   child: ListView.separated(
                     shrinkWrap: true,
                     itemCount: payments.length,
-                    separatorBuilder: (_, __) => const Divider(
+                    separatorBuilder: (_, _) => const Divider(
                       height: 1,
                       color: SwissLedgerColors.borderHairline,
                     ),
