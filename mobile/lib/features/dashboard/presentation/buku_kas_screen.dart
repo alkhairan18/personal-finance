@@ -17,6 +17,149 @@ class BukuKasScreen extends ConsumerWidget {
     return '${shifted.year.toString().padLeft(4, '0')}-${shifted.month.toString().padLeft(2, '0')}';
   }
 
+  Future<void> _showManageBudgetDialog(
+    BuildContext context,
+    WidgetRef ref, {
+    required String periodMonth,
+    required List<LocalCategory> expenseCategories,
+    LocalBudget? existingBudget,
+  }) async {
+    if (expenseCategories.isEmpty) return;
+    var selectedCategoryId =
+        existingBudget?.categoryId ?? expenseCategories.first.id;
+    if (!expenseCategories.any((c) => c.id == selectedCategoryId)) {
+      selectedCategoryId = expenseCategories.first.id;
+    }
+    final limitCtrl = TextEditingController(
+      text: existingBudget != null
+          ? RupiahFormatter.formatNumberOnly(existingBudget.limitAmount)
+          : '',
+    );
+    var isSubmitting = false;
+    String? errorText;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: Text(
+            existingBudget == null
+                ? 'Atur Anggaran Kategori'
+                : 'Ubah Anggaran Kategori',
+            style: SwissLedgerTypography.sans(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Periode: ${RupiahFormatter.formatMonthYear(periodMonth)}',
+                  style: SwissLedgerTypography.sans(
+                    fontSize: 12,
+                    color: SwissLedgerColors.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: selectedCategoryId,
+                  decoration: const InputDecoration(
+                    labelText: 'Kategori Pengeluaran',
+                  ),
+                  items: [
+                    for (final c in expenseCategories)
+                      DropdownMenuItem(
+                        value: c.id,
+                        child: Text(c.name),
+                      ),
+                  ],
+                  onChanged: existingBudget != null
+                      ? null
+                      : (val) {
+                          if (val != null) {
+                            setModalState(() => selectedCategoryId = val);
+                          }
+                        },
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const Key('budget_limit_amount_field'),
+                  controller: limitCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: const [RupiahInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: 'Batas Anggaran Bulanan (Rp)',
+                    prefixText: 'Rp ',
+                  ),
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    errorText!,
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 12,
+                      color: SwissLedgerColors.dangerRed,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            if (existingBudget != null)
+              TextButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        setModalState(() => isSubmitting = true);
+                        final repo = ref.read(budgetRepositoryProvider);
+                        await repo?.archiveBudget(existingBudget.id);
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                      },
+                child: const Text(
+                  'Hapus',
+                  style: TextStyle(color: SwissLedgerColors.dangerRed),
+                ),
+              ),
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.of(ctx).pop(),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              key: const Key('save_budget_button'),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final limit = RupiahFormatter.parseDigits(limitCtrl.text);
+                      if (limit <= 0) {
+                        setModalState(() {
+                          errorText =
+                              'Batas anggaran harus lebih dari Rp 0.';
+                        });
+                        return;
+                      }
+                      setModalState(() => isSubmitting = true);
+                      final repo = ref.read(budgetRepositoryProvider);
+                      if (repo != null) {
+                        await repo.upsertBudget(
+                          categoryId: selectedCategoryId,
+                          periodMonth: periodMonth,
+                          limitAmount: limit,
+                        );
+                      }
+                      if (ctx.mounted) Navigator.of(ctx).pop();
+                    },
+              child: const Text('Simpan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _showEditTransactionDialog(
     BuildContext context,
     WidgetRef ref,
@@ -320,10 +463,20 @@ class BukuKasScreen extends ConsumerWidget {
         }).toList();
 
         final categoryList = data.categoriesById.values.toList();
+        final expenseCategories =
+            categoryList.where((c) => c.kind == 'expense').toList();
         final totalActiveDebtAmount = data.activeDebts.fold<int>(
           0,
           (sum, d) => sum + d.remainingAmount,
         );
+
+        final spentByCategory = <String, int>{};
+        for (final tx in data.transactions) {
+          if (tx.type == 'expense' && tx.categoryId != null) {
+            spentByCategory[tx.categoryId!] =
+                (spentByCategory[tx.categoryId!] ?? 0) + tx.amount;
+          }
+        }
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -421,7 +574,10 @@ class BukuKasScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  const Divider(height: 1, color: SwissLedgerColors.borderHairline),
+                  const Divider(
+                    height: 1,
+                    color: SwissLedgerColors.borderHairline,
+                  ),
                   const SizedBox(height: 12),
                   Row(
                     children: [
@@ -484,7 +640,10 @@ class BukuKasScreen extends ConsumerWidget {
             if (data.activeDebts.isNotEmpty) ...[
               const SizedBox(height: 12),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 11,
+                ),
                 decoration: BoxDecoration(
                   color: SwissLedgerColors.surfaceElevated,
                   borderRadius: BorderRadius.circular(10),
@@ -514,7 +673,8 @@ class BukuKasScreen extends ConsumerWidget {
                           const SizedBox(height: 2),
                           Text(
                             data.activeDebts.length == 1
-                                ? (data.activeDebts.first.title ?? 'Hutang / Piutang')
+                                ? (data.activeDebts.first.title ??
+                                      'Hutang / Piutang')
                                 : 'Total sisa kewajiban aktif berjalan',
                             style: SwissLedgerTypography.sans(
                               fontSize: 13,
@@ -536,6 +696,158 @@ class BukuKasScreen extends ConsumerWidget {
                 ),
               ),
             ],
+
+            const SizedBox(height: 12),
+            // Monthly Category Budgets Card (FR-20)
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: SwissLedgerColors.surfaceElevated,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: SwissLedgerColors.borderHairline),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'ANGGARAN KATEGORI BULAN INI',
+                          overflow: TextOverflow.ellipsis,
+                          style: SwissLedgerTypography.sans(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: SwissLedgerColors.textMuted,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                      InkWell(
+                        key: const Key('manage_budgets_button'),
+                        onTap: () => _showManageBudgetDialog(
+                          context,
+                          ref,
+                          periodMonth: selectedMonth,
+                          expenseCategories: expenseCategories,
+                        ),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          child: Text(
+                            '+ Atur Anggaran',
+                            style: SwissLedgerTypography.sans(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: SwissLedgerColors.accentTeal,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  if (data.budgets.isEmpty)
+                    Text(
+                      'Belum ada batas anggaran bulanan. Tekan "+ Atur Anggaran" untuk mengontrol pengeluaran per kategori.',
+                      style: SwissLedgerTypography.sans(
+                        fontSize: 12,
+                        color: SwissLedgerColors.textMuted,
+                      ),
+                    )
+                  else
+                    for (var i = 0; i < data.budgets.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 10),
+                      Builder(
+                        builder: (context) {
+                          final b = data.budgets[i];
+                          final catName =
+                              data.categoriesById[b.categoryId]?.name ??
+                              'Kategori';
+                          final spent = spentByCategory[b.categoryId] ?? 0;
+                          final ratio = b.limitAmount > 0
+                              ? (spent / b.limitAmount)
+                              : 0.0;
+                          final pct = (ratio * 100).round();
+                          final barColor = ratio >= 1.0
+                              ? SwissLedgerColors.dangerRed
+                              : (ratio >= 0.8
+                                    ? SwissLedgerColors.warningAmber
+                                    : SwissLedgerColors.accentTeal);
+                          final diff = b.limitAmount - spent;
+
+                          return InkWell(
+                            onTap: () => _showManageBudgetDialog(
+                              context,
+                              ref,
+                              periodMonth: selectedMonth,
+                              expenseCategories: expenseCategories,
+                              existingBudget: b,
+                            ),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        catName,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: SwissLedgerTypography.sans(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      '$pct% · ${RupiahFormatter.format(spent)} / ${RupiahFormatter.format(b.limitAmount)}',
+                                      style: SwissLedgerTypography.monoTabular(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: barColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 5),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(3),
+                                  child: LinearProgressIndicator(
+                                    value: ratio.clamp(0.0, 1.0),
+                                    minHeight: 6,
+                                    backgroundColor:
+                                        SwissLedgerColors.surfaceSubtle,
+                                    color: barColor,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  diff >= 0
+                                      ? 'Sisa anggaran ${RupiahFormatter.format(diff)}'
+                                      : 'Melebihi anggaran ${RupiahFormatter.format(diff.abs())}',
+                                  style: SwissLedgerTypography.sans(
+                                    fontSize: 10,
+                                    color: diff >= 0
+                                        ? SwissLedgerColors.textMuted
+                                        : SwissLedgerColors.dangerRed,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                ],
+              ),
+            ),
 
             const SizedBox(height: 14),
             // Search field
@@ -716,7 +1028,8 @@ class BukuKasScreen extends ConsumerWidget {
                                     filteredTxs[i],
                                   )
                                 : null,
-                            category: data.categoriesById[filteredTxs[i].categoryId],
+                            category:
+                                data.categoriesById[filteredTxs[i].categoryId],
                             onReverse: () => _confirmAndReverseTransaction(
                               context,
                               ref,
@@ -737,6 +1050,7 @@ class BukuKasScreen extends ConsumerWidget {
     final allTxs = await db.getActiveTransactions(yearMonth: yearMonth);
     final cats = await db.getActiveCategories();
     final debts = await db.getActiveDebts();
+    final budgets = await db.getActiveBudgets(periodMonth: yearMonth);
 
     var income = 0;
     var expense = 0;
@@ -752,6 +1066,7 @@ class BukuKasScreen extends ConsumerWidget {
       transactions: allTxs,
       categoriesById: {for (final c in cats) c.id: c},
       activeDebts: debts.where((d) => d.remainingAmount > 0).toList(),
+      budgets: budgets,
       totalIncome: income,
       totalExpense: expense,
     );
@@ -805,6 +1120,7 @@ class _BukuKasViewData {
   final List<LocalTransaction> transactions;
   final Map<String, LocalCategory> categoriesById;
   final List<LocalDebt> activeDebts;
+  final List<LocalBudget> budgets;
   final int totalIncome;
   final int totalExpense;
 
@@ -812,6 +1128,7 @@ class _BukuKasViewData {
     required this.transactions,
     required this.categoriesById,
     required this.activeDebts,
+    required this.budgets,
     required this.totalIncome,
     required this.totalExpense,
   });

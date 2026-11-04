@@ -5,7 +5,7 @@ import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/core/money/rupiah_formatter.dart';
 
-class WishlistScreen extends ConsumerWidget {
+class WishlistScreen extends ConsumerStatefulWidget {
   const WishlistScreen({super.key});
 
   static Future<void> showCreateOrEditWishlistDialog(
@@ -20,7 +20,12 @@ class WishlistScreen extends ConsumerWidget {
           ? RupiahFormatter.formatNumberOnly(existingItem.targetAmount)
           : '',
     );
+    final targetDateCtrl = TextEditingController(
+      text: existingItem?.targetDate ?? '',
+    );
+    final notesCtrl = TextEditingController(text: existingItem?.notes ?? '');
     var priority = existingItem?.priority ?? 'medium';
+    var isSubmitting = false;
     String? errorText;
 
     await showDialog<void>(
@@ -84,6 +89,61 @@ class WishlistScreen extends ConsumerWidget {
                     if (v != null) setModalState(() => priority = v);
                   },
                 ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: targetDateCtrl,
+                  readOnly: true,
+                  decoration: InputDecoration(
+                    labelText: 'Tanggal Target (Opsional)',
+                    hintText: 'Pilih tanggal target...',
+                    suffixIcon: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (targetDateCtrl.text.isNotEmpty)
+                          IconButton(
+                            icon: const Icon(
+                              PhosphorIconsRegular.xCircle,
+                              size: 16,
+                            ),
+                            onPressed: () =>
+                                setModalState(() => targetDateCtrl.clear()),
+                          ),
+                        IconButton(
+                          icon: const Icon(
+                            PhosphorIconsRegular.calendarBlank,
+                            size: 16,
+                          ),
+                          onPressed: () async {
+                            final initial =
+                                DateTime.tryParse(targetDateCtrl.text.trim()) ??
+                                DateTime.now().add(const Duration(days: 30));
+                            final picked = await showDatePicker(
+                              context: ctx,
+                              initialDate: initial,
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime(2100),
+                            );
+                            if (picked != null) {
+                              setModalState(() {
+                                targetDateCtrl.text = picked
+                                    .toIso8601String()
+                                    .substring(0, 10);
+                              });
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: notesCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Catatan / Referensi (Opsional)',
+                    hintText: 'Link toko atau spesifikasi...',
+                  ),
+                ),
                 if (errorText != null) ...[
                   const SizedBox(height: 10),
                   Text(
@@ -100,43 +160,59 @@ class WishlistScreen extends ConsumerWidget {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
+              onPressed: isSubmitting ? null : () => Navigator.of(ctx).pop(),
               child: const Text('Batal'),
             ),
             ElevatedButton(
-              onPressed: () async {
-                final target = RupiahFormatter.parseDigits(targetCtrl.text);
-                final name = nameCtrl.text.trim();
-                if (name.isEmpty) {
-                  setModalState(() {
-                    errorText = 'Nama barang tidak boleh kosong.';
-                  });
-                  return;
-                }
-                if (target <= 0) {
-                  setModalState(() {
-                    errorText = 'Target harga harus lebih dari Rp 0.';
-                  });
-                  return;
-                }
-                final repo = ref.read(wishlistRepositoryProvider);
-                if (repo == null) return;
-                if (isEdit) {
-                  await repo.updateWishlistItem(
-                    wishlistId: existingItem.id,
-                    itemName: name,
-                    targetAmount: target,
-                    priority: priority,
-                  );
-                } else {
-                  await repo.createWishlistItem(
-                    itemName: name,
-                    targetAmount: target,
-                    priority: priority,
-                  );
-                }
-                if (ctx.mounted) Navigator.of(ctx).pop();
-              },
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final target = RupiahFormatter.parseDigits(
+                        targetCtrl.text,
+                      );
+                      final name = nameCtrl.text.trim();
+                      if (name.isEmpty) {
+                        setModalState(() {
+                          errorText = 'Nama barang tidak boleh kosong.';
+                        });
+                        return;
+                      }
+                      if (target <= 0) {
+                        setModalState(() {
+                          errorText = 'Target harga harus lebih dari Rp 0.';
+                        });
+                        return;
+                      }
+                      setModalState(() => isSubmitting = true);
+                      final repo = ref.read(wishlistRepositoryProvider);
+                      if (repo == null) return;
+                      final targetDate = targetDateCtrl.text.trim().isEmpty
+                          ? null
+                          : targetDateCtrl.text.trim();
+                      final notes = notesCtrl.text.trim().isEmpty
+                          ? null
+                          : notesCtrl.text.trim();
+                      if (isEdit) {
+                        await repo.updateWishlistItem(
+                          wishlistId: existingItem.id,
+                          itemName: name,
+                          targetAmount: target,
+                          priority: priority,
+                          targetDate: targetDate,
+                          notes: notes,
+                          updateOptionalFields: true,
+                        );
+                      } else {
+                        await repo.createWishlistItem(
+                          itemName: name,
+                          targetAmount: target,
+                          priority: priority,
+                          targetDate: targetDate,
+                          notes: notes,
+                        );
+                      }
+                      if (ctx.mounted) Navigator.of(ctx).pop();
+                    },
               child: Text(isEdit ? 'Simpan Perubahan' : 'Simpan'),
             ),
           ],
@@ -146,20 +222,52 @@ class WishlistScreen extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<WishlistScreen> createState() => _WishlistScreenState();
+}
+
+class _WishlistScreenState extends ConsumerState<WishlistScreen> {
+  String _selectedFilter = 'all';
+
+  bool _matchesFilter(LocalWishlist item) {
+    switch (_selectedFilter) {
+      case 'active':
+        return item.status != 'purchased' && item.status != 'cancelled';
+      case 'high':
+        return item.priority == 'high' &&
+            item.status != 'purchased' &&
+            item.status != 'cancelled';
+      case 'purchased':
+        return item.status == 'purchased';
+      case 'cancelled':
+        return item.status == 'cancelled';
+      default:
+        return true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final db = ref.watch(activeDatabaseProvider);
     if (db == null) {
       return const Center(child: CircularProgressIndicator());
     }
 
     return FutureBuilder<List<LocalWishlist>>(
-      future: db.getActiveWishlistItems(),
+      future: db.getAllNonArchivedWishlistItems(),
       builder: (context, snapshot) {
-        final items = snapshot.data ?? const [];
-        final totalTarget =
-            items.fold<int>(0, (sum, w) => sum + w.targetAmount);
-        final totalSaved =
-            items.fold<int>(0, (sum, w) => sum + w.savedAmount);
+        final allItems = snapshot.data ?? const [];
+        final activePlanningItems = allItems
+            .where((w) => w.status != 'cancelled')
+            .toList();
+        final totalTarget = activePlanningItems.fold<int>(
+          0,
+          (sum, w) => sum + w.targetAmount,
+        );
+        final totalSaved = activePlanningItems.fold<int>(
+          0,
+          (sum, w) => sum + w.savedAmount,
+        );
+        final filteredItems = allItems.where(_matchesFilter).toList();
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -237,7 +345,8 @@ class WishlistScreen extends ConsumerWidget {
             const SizedBox(height: 10),
             OutlinedButton.icon(
               key: const Key('add_wishlist_button'),
-              onPressed: () => showCreateOrEditWishlistDialog(context, ref),
+              onPressed: () =>
+                  WishlistScreen.showCreateOrEditWishlistDialog(context, ref),
               icon: const Icon(PhosphorIconsRegular.plus, size: 15),
               label: Text(
                 'Tambah Rencana Wishlist',
@@ -248,7 +357,50 @@ class WishlistScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 10),
-            if (items.isEmpty)
+            SizedBox(
+              height: 34,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  _WishlistFilterChip(
+                    chipKey: const Key('wishlist_filter_all'),
+                    label: 'Semua',
+                    selected: _selectedFilter == 'all',
+                    onTap: () => setState(() => _selectedFilter = 'all'),
+                  ),
+                  const SizedBox(width: 6),
+                  _WishlistFilterChip(
+                    chipKey: const Key('wishlist_filter_active'),
+                    label: 'Aktif',
+                    selected: _selectedFilter == 'active',
+                    onTap: () => setState(() => _selectedFilter = 'active'),
+                  ),
+                  const SizedBox(width: 6),
+                  _WishlistFilterChip(
+                    chipKey: const Key('wishlist_filter_high'),
+                    label: 'Prioritas Tinggi',
+                    selected: _selectedFilter == 'high',
+                    onTap: () => setState(() => _selectedFilter = 'high'),
+                  ),
+                  const SizedBox(width: 6),
+                  _WishlistFilterChip(
+                    chipKey: const Key('wishlist_filter_purchased'),
+                    label: 'Dibeli',
+                    selected: _selectedFilter == 'purchased',
+                    onTap: () => setState(() => _selectedFilter = 'purchased'),
+                  ),
+                  const SizedBox(width: 6),
+                  _WishlistFilterChip(
+                    chipKey: const Key('wishlist_filter_cancelled'),
+                    label: 'Dibatalkan',
+                    selected: _selectedFilter == 'cancelled',
+                    onTap: () => setState(() => _selectedFilter = 'cancelled'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (filteredItems.isEmpty)
               Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
@@ -259,31 +411,84 @@ class WishlistScreen extends ConsumerWidget {
                 child: Column(
                   children: [
                     Text(
-                      'Belum ada daftar rencana pembelian pada Wishlist.',
+                      allItems.isEmpty
+                          ? 'Belum ada daftar rencana pembelian pada Wishlist.'
+                          : 'Tidak ada item Wishlist yang sesuai dengan filter terpilih.',
                       textAlign: TextAlign.center,
                       style: SwissLedgerTypography.sans(
                         fontSize: 13,
                         color: SwissLedgerColors.textMuted,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    ElevatedButton.icon(
-                      onPressed: () =>
-                          showCreateOrEditWishlistDialog(context, ref),
-                      icon: const Icon(PhosphorIconsRegular.plus, size: 14),
-                      label: const Text('Buat Rencana Pertama'),
-                    ),
+                    if (allItems.isEmpty) ...[
+                      const SizedBox(height: 12),
+                      ElevatedButton.icon(
+                        onPressed: () =>
+                            WishlistScreen.showCreateOrEditWishlistDialog(
+                              context,
+                              ref,
+                            ),
+                        icon: const Icon(PhosphorIconsRegular.plus, size: 14),
+                        label: const Text('Buat Rencana Pertama'),
+                      ),
+                    ],
                   ],
                 ),
               )
             else
-              for (final item in items) ...[
+              for (final item in filteredItems) ...[
                 _WishlistCard(item: item),
                 const SizedBox(height: 10),
               ],
           ],
         );
       },
+    );
+  }
+}
+
+class _WishlistFilterChip extends StatelessWidget {
+  final Key chipKey;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _WishlistFilterChip({
+    required this.chipKey,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      key: chipKey,
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? SwissLedgerColors.textPrimary
+              : SwissLedgerColors.surfaceElevated,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected
+                ? SwissLedgerColors.textPrimary
+                : SwissLedgerColors.borderHairline,
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: SwissLedgerTypography.sans(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : SwissLedgerColors.textPrimary,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -305,8 +510,10 @@ class _WishlistCard extends ConsumerWidget {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setModalState) {
           final currentVal = RupiahFormatter.parseDigits(amountCtrl.text);
-          final remaining =
-              (item.targetAmount - currentVal).clamp(0, item.targetAmount);
+          final remaining = (item.targetAmount - currentVal).clamp(
+            0,
+            item.targetAmount,
+          );
           return AlertDialog(
             title: Text(
               'Tabungan ${item.itemName}',
@@ -363,14 +570,21 @@ class _WishlistCard extends ConsumerWidget {
                     spacing: 6,
                     runSpacing: 6,
                     children: [
-                      for (final delta in const [50000, 100000, 250000, 500000])
+                      for (final delta in const [
+                        50000,
+                        100000,
+                        250000,
+                        500000,
+                      ])
                         InkWell(
                           onTap: () {
-                            final base =
-                                RupiahFormatter.parseDigits(amountCtrl.text);
+                            final base = RupiahFormatter.parseDigits(
+                              amountCtrl.text,
+                            );
                             final updated = base + delta;
-                            final formatted =
-                                RupiahFormatter.formatNumberOnly(updated);
+                            final formatted = RupiahFormatter.formatNumberOnly(
+                              updated,
+                            );
                             amountCtrl.value = TextEditingValue(
                               text: formatted,
                               selection: TextSelection.collapsed(
@@ -432,8 +646,9 @@ class _WishlistCard extends ConsumerWidget {
               ElevatedButton(
                 key: const Key('wishlist_savings_submit_button'),
                 onPressed: () async {
-                  final nextSaved =
-                      RupiahFormatter.parseDigits(amountCtrl.text);
+                  final nextSaved = RupiahFormatter.parseDigits(
+                    amountCtrl.text,
+                  );
                   final repo = ref.read(wishlistRepositoryProvider);
                   if (repo == null) return;
                   await repo.updateSavedAmount(
@@ -516,6 +731,41 @@ class _WishlistCard extends ConsumerWidget {
     }
   }
 
+  Future<void> _confirmMarkCancelled(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Batalkan Rencana Wishlist?'),
+        content: Text(
+          'Ubah status "${item.itemName}" menjadi Dibatalkan?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Kembali'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SwissLedgerColors.warningAmber,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Ya, Batalkan'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      final repo = ref.read(wishlistRepositoryProvider);
+      if (repo != null) {
+        await repo.markCancelled(item.id);
+      }
+    }
+  }
+
   String _priorityLabel(String p) {
     switch (p) {
       case 'high':
@@ -531,6 +781,8 @@ class _WishlistCard extends ConsumerWidget {
     switch (s) {
       case 'purchased':
         return 'Dibeli';
+      case 'cancelled':
+        return 'Dibatalkan';
       case 'ready_to_buy':
         return 'Siap Dibeli';
       case 'saving':
@@ -569,8 +821,10 @@ class _WishlistCard extends ConsumerWidget {
               ),
               Flexible(
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: SwissLedgerColors.surfaceSubtle,
                     borderRadius: BorderRadius.circular(6),
@@ -617,6 +871,21 @@ class _WishlistCard extends ConsumerWidget {
               ),
             ],
           ),
+          if ((item.targetDate != null && item.targetDate!.isNotEmpty) ||
+              (item.notes != null && item.notes!.isNotEmpty)) ...[
+            const SizedBox(height: 4),
+            Text(
+              [
+                if (item.targetDate != null && item.targetDate!.isNotEmpty)
+                  'Target: ${RupiahFormatter.formatIsoDate(item.targetDate!)}',
+                if (item.notes != null && item.notes!.isNotEmpty) item.notes!,
+              ].join(' · '),
+              style: SwissLedgerTypography.sans(
+                fontSize: 11,
+                color: SwissLedgerColors.textMuted,
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           ClipRRect(
             borderRadius: BorderRadius.circular(3),
@@ -654,7 +923,7 @@ class _WishlistCard extends ConsumerWidget {
               ),
             ],
           ),
-          if (item.status != 'purchased') ...[
+          if (item.status != 'purchased' && item.status != 'cancelled') ...[
             const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerRight,
@@ -676,6 +945,21 @@ class _WishlistCard extends ConsumerWidget {
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
                         color: SwissLedgerColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _confirmMarkCancelled(context, ref),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    child: Text(
+                      'Batalkan',
+                      style: SwissLedgerTypography.sans(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: SwissLedgerColors.textMuted,
                       ),
                     ),
                   ),

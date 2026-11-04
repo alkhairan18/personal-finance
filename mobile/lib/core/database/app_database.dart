@@ -271,7 +271,8 @@ class LocalInstallment {
     required this.syncStatus,
   });
 
-  int get remainingAmount => (plannedAmount - paidAmount) > 0 ? (plannedAmount - paidAmount) : 0;
+  int get remainingAmount =>
+      (plannedAmount - paidAmount) > 0 ? (plannedAmount - paidAmount) : 0;
 
   factory LocalInstallment.fromRow(sql.Row row) {
     return LocalInstallment(
@@ -384,6 +385,47 @@ class LocalWishlist {
   }
 }
 
+class LocalBudget {
+  final String id;
+  final String userId;
+  final String categoryId;
+  final String periodMonth;
+  final int limitAmount;
+  final String status;
+  final int version;
+  final String syncStatus;
+  final String createdAt;
+  final String updatedAt;
+
+  const LocalBudget({
+    required this.id,
+    required this.userId,
+    required this.categoryId,
+    required this.periodMonth,
+    required this.limitAmount,
+    required this.status,
+    required this.version,
+    required this.syncStatus,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  factory LocalBudget.fromRow(sql.Row row) {
+    return LocalBudget(
+      id: row['id'] as String,
+      userId: row['user_id'] as String,
+      categoryId: row['category_id'] as String,
+      periodMonth: row['period_month'] as String,
+      limitAmount: row['limit_amount'] as int,
+      status: (row['status'] as String?) ?? 'active',
+      version: (row['version'] as int?) ?? 1,
+      syncStatus: (row['sync_status'] as String?) ?? 'synced',
+      createdAt: (row['created_at'] as String?) ?? '',
+      updatedAt: (row['updated_at'] as String?) ?? '',
+    );
+  }
+}
+
 class SyncOutboxItem {
   final int localSeq;
   final String operationId;
@@ -410,7 +452,8 @@ class SyncOutboxItem {
   });
 
   factory SyncOutboxItem.fromRow(sql.Row row) {
-    final decoded = jsonDecode(row['payload_json'] as String) as Map<String, dynamic>;
+    final decoded =
+        jsonDecode(row['payload_json'] as String) as Map<String, dynamic>;
     return SyncOutboxItem(
       localSeq: row['local_seq'] as int,
       operationId: row['operation_id'] as String,
@@ -451,8 +494,10 @@ class SyncConflictEntry {
       operationId: row['operation_id'] as String,
       entityType: row['entity_type'] as String,
       entityId: row['entity_id'] as String,
-      localPayload: jsonDecode(row['local_payload_json'] as String) as Map<String, dynamic>,
-      serverPayload: jsonDecode(row['server_payload_json'] as String) as Map<String, dynamic>,
+      localPayload:
+          jsonDecode(row['local_payload_json'] as String) as Map<String, dynamic>,
+      serverPayload:
+          jsonDecode(row['server_payload_json'] as String) as Map<String, dynamic>,
       createdAt: row['created_at'] as String,
     );
   }
@@ -661,6 +706,22 @@ class AppDatabase extends ChangeNotifier {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS local_budgets (
+        id TEXT PRIMARY KEY NOT NULL,
+        user_id TEXT NOT NULL,
+        category_id TEXT NOT NULL,
+        period_month TEXT NOT NULL,
+        limit_amount INTEGER NOT NULL CHECK (limit_amount > 0),
+        status TEXT NOT NULL DEFAULT 'active',
+        version INTEGER NOT NULL DEFAULT 1,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_local_budgets_user_period
+        ON local_budgets (user_id, period_month, status);
+
       CREATE TABLE IF NOT EXISTS sync_outbox (
         local_seq INTEGER PRIMARY KEY AUTOINCREMENT,
         operation_id TEXT NOT NULL UNIQUE,
@@ -852,6 +913,15 @@ class AppDatabase extends ChangeNotifier {
     return rows.map(LocalCategory.fromRow).toList();
   }
 
+  Future<LocalCategory?> getCategoryById(String id) async {
+    final rows = select(
+      'SELECT * FROM local_categories WHERE id = ? LIMIT 1',
+      [id],
+    );
+    if (rows.isEmpty) return null;
+    return LocalCategory.fromRow(rows.first);
+  }
+
   Future<List<LocalTransaction>> getActiveTransactions({String? yearMonth}) async {
     final sql.ResultSet rows;
     if (yearMonth != null && yearMonth.isNotEmpty) {
@@ -937,6 +1007,18 @@ class AppDatabase extends ChangeNotifier {
     return rows.map(LocalDebtPayment.fromRow).toList();
   }
 
+  Future<List<LocalDebtPayment>> getPaymentsForDebt(String debtId) async {
+    final rows = select(
+      '''
+      SELECT * FROM local_debt_payments
+      WHERE debt_id = ? AND user_id = ?
+      ORDER BY payment_date DESC, created_at DESC
+      ''',
+      [debtId, userId],
+    );
+    return rows.map(LocalDebtPayment.fromRow).toList();
+  }
+
   Future<List<LocalInstallmentPlan>> getActiveInstallmentPlans() async {
     final rows = select(
       '''
@@ -970,12 +1052,54 @@ class AppDatabase extends ChangeNotifier {
     return LocalInstallment.fromRow(rows.first);
   }
 
+  Future<List<LocalInstallmentPayment>> getPaymentsForInstallment(
+    String installmentId,
+  ) async {
+    final rows = select(
+      '''
+      SELECT * FROM local_installment_payments
+      WHERE installment_id = ? AND user_id = ?
+      ORDER BY payment_date DESC, created_at DESC
+      ''',
+      [installmentId, userId],
+    );
+    return rows.map(LocalInstallmentPayment.fromRow).toList();
+  }
+
+  Future<List<LocalInstallmentPayment>> getPaymentsForPlan(String planId) async {
+    final rows = select(
+      '''
+      SELECT p.* FROM local_installment_payments p
+      INNER JOIN local_installments i ON i.id = p.installment_id
+      WHERE i.plan_id = ? AND p.user_id = ?
+      ORDER BY p.payment_date DESC, p.created_at DESC
+      ''',
+      [planId, userId],
+    );
+    return rows.map(LocalInstallmentPayment.fromRow).toList();
+  }
+
   Future<List<LocalWishlist>> getActiveWishlistItems() async {
     final rows = select(
       '''
       SELECT * FROM local_wishlists
       WHERE user_id = ? AND status NOT IN ('cancelled', 'archived')
       ORDER BY
+        CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
+        created_at DESC
+      ''',
+      [userId],
+    );
+    return rows.map(LocalWishlist.fromRow).toList();
+  }
+
+  Future<List<LocalWishlist>> getAllNonArchivedWishlistItems() async {
+    final rows = select(
+      '''
+      SELECT * FROM local_wishlists
+      WHERE user_id = ? AND status != 'archived'
+      ORDER BY
+        CASE status WHEN 'purchased' THEN 1 WHEN 'cancelled' THEN 2 ELSE 0 END ASC,
         CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
         created_at DESC
       ''',
@@ -991,6 +1115,29 @@ class AppDatabase extends ChangeNotifier {
     );
     if (rows.isEmpty) return null;
     return LocalWishlist.fromRow(rows.first);
+  }
+
+  Future<List<LocalBudget>> getActiveBudgets({
+    required String periodMonth,
+  }) async {
+    final rows = select(
+      '''
+      SELECT * FROM local_budgets
+      WHERE user_id = ? AND period_month = ? AND status = 'active'
+      ORDER BY limit_amount DESC, created_at ASC
+      ''',
+      [userId, periodMonth],
+    );
+    return rows.map(LocalBudget.fromRow).toList();
+  }
+
+  Future<LocalBudget?> getBudgetById(String id) async {
+    final rows = select(
+      'SELECT * FROM local_budgets WHERE id = ? AND user_id = ? LIMIT 1',
+      [id, userId],
+    );
+    if (rows.isEmpty) return null;
+    return LocalBudget.fromRow(rows.first);
   }
 
   void enqueueOutbox({
@@ -1065,12 +1212,14 @@ class AppDatabase extends ChangeNotifier {
   }
 
   Future<List<SyncConflictEntry>> getSyncConflicts() async {
-    final rows = select('SELECT * FROM sync_conflicts ORDER BY created_at DESC');
+    final rows =
+        select('SELECT * FROM sync_conflicts ORDER BY created_at DESC');
     return rows.map(SyncConflictEntry.fromRow).toList();
   }
 
   Future<String?> getSyncMeta(String key) async {
-    final rows = select('SELECT value FROM sync_metadata WHERE key = ? LIMIT 1', [key]);
+    final rows =
+        select('SELECT value FROM sync_metadata WHERE key = ? LIMIT 1', [key]);
     if (rows.isEmpty) return null;
     return rows.first['value'] as String;
   }
@@ -1087,7 +1236,17 @@ class AppDatabase extends ChangeNotifier {
     final transactions = await getActiveTransactions();
     final debts = await getActiveDebts();
     final plans = await getActiveInstallmentPlans();
-    final wishlists = await getActiveWishlistItems();
+    final wishlists = await getAllNonArchivedWishlistItems();
+    final budgetRows = select(
+      "SELECT * FROM local_budgets WHERE user_id = ? AND status = 'active'",
+      [userId],
+    );
+    final budgets = budgetRows.map(LocalBudget.fromRow).toList();
+    final installmentRows = select(
+      'SELECT * FROM local_installments WHERE user_id = ? ORDER BY plan_id ASC, installment_number ASC',
+      [userId],
+    );
+    final installments = installmentRows.map(LocalInstallment.fromRow).toList();
     return {
       'user_id': userId,
       'exported_at': DateTime.now().toUtc().toIso8601String(),
@@ -1103,6 +1262,8 @@ class AppDatabase extends ChangeNotifier {
               'title': t.title,
               'notes': t.notes,
               'category_id': t.categoryId,
+              'status': t.status,
+              'version': t.version,
             },
           )
           .toList(),
@@ -1112,22 +1273,76 @@ class AppDatabase extends ChangeNotifier {
               'id': d.id,
               'direction': d.direction,
               'counterparty_name': d.counterpartyName,
+              'title': d.title,
+              'notes': d.notes,
               'principal_amount': d.principalAmount,
               'remaining_amount': d.remainingAmount,
+              'start_date': d.startDate,
               'due_date': d.dueDate,
               'status': d.status,
+              'version': d.version,
             },
           )
           .toList(),
       'installment_plans_count': plans.length,
+      'installment_plans': plans
+          .map(
+            (pl) => {
+              'id': pl.id,
+              'title': pl.title,
+              'vendor_name': pl.vendorName,
+              'category_id': pl.categoryId,
+              'total_amount': pl.totalAmount,
+              'installment_count': pl.installmentCount,
+              'frequency': pl.frequency,
+              'start_date': pl.startDate,
+              'notes': pl.notes,
+              'status': pl.status,
+              'version': pl.version,
+            },
+          )
+          .toList(),
+      'installments': installments
+          .map(
+            (inst) => {
+              'id': inst.id,
+              'plan_id': inst.planId,
+              'installment_number': inst.installmentNumber,
+              'due_date': inst.dueDate,
+              'planned_amount': inst.plannedAmount,
+              'paid_amount': inst.paidAmount,
+              'status': inst.status,
+              'paid_at': inst.paidAt,
+              'version': inst.version,
+            },
+          )
+          .toList(),
       'wishlists': wishlists
           .map(
             (w) => {
               'id': w.id,
               'item_name': w.itemName,
+              'category_id': w.categoryId,
               'target_amount': w.targetAmount,
               'saved_amount': w.savedAmount,
               'priority': w.priority,
+              'target_date': w.targetDate,
+              'url_or_reference': w.urlOrReference,
+              'notes': w.notes,
+              'status': w.status,
+              'version': w.version,
+            },
+          )
+          .toList(),
+      'budgets': budgets
+          .map(
+            (b) => {
+              'id': b.id,
+              'category_id': b.categoryId,
+              'period_month': b.periodMonth,
+              'limit_amount': b.limitAmount,
+              'status': b.status,
+              'version': b.version,
             },
           )
           .toList(),

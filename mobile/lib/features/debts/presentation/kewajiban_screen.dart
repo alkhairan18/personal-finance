@@ -91,7 +91,9 @@ class _SubTabPill extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 8),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: selected ? SwissLedgerColors.surfaceElevated : Colors.transparent,
+          color: selected
+              ? SwissLedgerColors.surfaceElevated
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Text(
@@ -132,6 +134,7 @@ class _DebtsSubView extends ConsumerWidget {
       text: existingDebt?.dueDate ?? '',
     );
     var direction = existingDebt?.direction ?? 'payable';
+    var isSubmitting = false;
     String? errorText;
 
     await showDialog<void>(
@@ -152,7 +155,10 @@ class _DebtsSubView extends ConsumerWidget {
                   DropdownButtonFormField<String>(
                     initialValue: direction,
                     items: const [
-                      DropdownMenuItem(value: 'payable', child: Text('Hutang')),
+                      DropdownMenuItem(
+                        value: 'payable',
+                        child: Text('Hutang'),
+                      ),
                       DropdownMenuItem(
                         value: 'receivable',
                         child: Text('Piutang'),
@@ -247,51 +253,57 @@ class _DebtsSubView extends ConsumerWidget {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
+              onPressed: isSubmitting ? null : () => Navigator.of(ctx).pop(),
               child: const Text('Batal'),
             ),
             ElevatedButton(
-              onPressed: () async {
-                final amount = RupiahFormatter.parseDigits(amountCtrl.text);
-                final name = counterpartyCtrl.text.trim();
-                if (amount <= 0 || name.isEmpty) {
-                  setModalState(() {
-                    errorText =
-                        'Nama pihak dan nominal (lebih dari Rp 0) wajib diisi.';
-                  });
-                  return;
-                }
-                final repo = ref.read(debtRepositoryProvider);
-                if (repo == null) return;
-                final dueIso = dueDateCtrl.text.trim().isEmpty
-                    ? null
-                    : dueDateCtrl.text.trim();
-                final cleanTitle = titleCtrl.text.trim().isEmpty
-                    ? null
-                    : titleCtrl.text.trim();
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amount = RupiahFormatter.parseDigits(
+                        amountCtrl.text,
+                      );
+                      final name = counterpartyCtrl.text.trim();
+                      if (amount <= 0 || name.isEmpty) {
+                        setModalState(() {
+                          errorText =
+                              'Nama pihak dan nominal (lebih dari Rp 0) wajib diisi.';
+                        });
+                        return;
+                      }
+                      setModalState(() => isSubmitting = true);
+                      final repo = ref.read(debtRepositoryProvider);
+                      if (repo == null) return;
+                      final dueIso = dueDateCtrl.text.trim().isEmpty
+                          ? null
+                          : dueDateCtrl.text.trim();
+                      final cleanTitle = titleCtrl.text.trim().isEmpty
+                          ? null
+                          : titleCtrl.text.trim();
 
-                if (existingDebt == null) {
-                  final todayIso =
-                      DateTime.now().toIso8601String().substring(0, 10);
-                  await repo.createDebt(
-                    direction: direction,
-                    counterpartyName: name,
-                    principalAmount: amount,
-                    startDate: todayIso,
-                    dueDate: dueIso,
-                    title: cleanTitle,
-                  );
-                } else {
-                  await repo.updateDebt(
-                    debtId: existingDebt.id,
-                    counterpartyName: name,
-                    principalAmount: amount,
-                    dueDate: dueIso,
-                    title: cleanTitle,
-                  );
-                }
-                if (ctx.mounted) Navigator.of(ctx).pop();
-              },
+                      if (existingDebt == null) {
+                        final todayIso = DateTime.now()
+                            .toIso8601String()
+                            .substring(0, 10);
+                        await repo.createDebt(
+                          direction: direction,
+                          counterpartyName: name,
+                          principalAmount: amount,
+                          startDate: todayIso,
+                          dueDate: dueIso,
+                          title: cleanTitle,
+                        );
+                      } else {
+                        await repo.updateDebt(
+                          debtId: existingDebt.id,
+                          counterpartyName: name,
+                          principalAmount: amount,
+                          dueDate: dueIso,
+                          title: cleanTitle,
+                        );
+                      }
+                      if (ctx.mounted) Navigator.of(ctx).pop();
+                    },
               child: const Text('Simpan'),
             ),
           ],
@@ -440,10 +452,158 @@ class _DebtCard extends ConsumerWidget {
     required this.onEdit,
   });
 
-  Future<void> _showPartialPayDialog(BuildContext context, WidgetRef ref) async {
+  Future<void> _showDebtPaymentHistorySheet(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final db = ref.read(activeDatabaseProvider);
+    if (db == null) return;
+    final payments = await db.getPaymentsForDebt(debt.id);
+    if (!context.mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        decoration: const BoxDecoration(
+          color: SwissLedgerColors.surfaceElevated,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+          border: Border(
+            top: BorderSide(color: SwissLedgerColors.borderHairline, width: 1),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: SwissLedgerColors.borderHairline,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Riwayat Pembayaran · ${debt.counterpartyName}',
+                style: SwissLedgerTypography.sans(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (payments.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Text(
+                    'Belum ada riwayat pembayaran untuk kewajiban ini.',
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 12,
+                      color: SwissLedgerColors.textMuted,
+                    ),
+                  ),
+                )
+              else
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 320),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: payments.length,
+                    separatorBuilder: (_, _) => const Divider(
+                      height: 1,
+                      color: SwissLedgerColors.borderHairline,
+                    ),
+                    itemBuilder: (_, idx) {
+                      final p = payments[idx];
+                      final isReversed = p.status == 'reversed';
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    RupiahFormatter.format(p.amount),
+                                    style: SwissLedgerTypography.monoTabular(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: isReversed
+                                          ? SwissLedgerColors.textMuted
+                                          : SwissLedgerColors.textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${RupiahFormatter.formatIsoDate(p.paymentDate)} · ${isReversed ? 'Dikoreksi' : 'Tercatat'}',
+                                    style: SwissLedgerTypography.sans(
+                                      fontSize: 11,
+                                      color: SwissLedgerColors.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (!isReversed && p.linkedTransactionId != null)
+                              TextButton(
+                                onPressed: () async {
+                                  final txRepo = ref.read(
+                                    transactionRepositoryProvider,
+                                  );
+                                  if (txRepo == null) return;
+                                  await txRepo.reverseTransaction(
+                                    originalTransactionId:
+                                        p.linkedTransactionId!,
+                                    reversalDate: DateTime.now()
+                                        .toIso8601String()
+                                        .substring(0, 10),
+                                    notes:
+                                        'Koreksi pembayaran ${debt.counterpartyName}',
+                                  );
+                                  if (ctx.mounted) Navigator.of(ctx).pop();
+                                },
+                                child: Text(
+                                  'Koreksi',
+                                  style: SwissLedgerTypography.sans(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: SwissLedgerColors.dangerRed,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showPartialPayDialog(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     final amountCtrl = TextEditingController(
       text: RupiahFormatter.formatNumberOnly(debt.remainingAmount),
     );
+    final dateCtrl = TextEditingController(
+      text: DateTime.now().toIso8601String().substring(0, 10),
+    );
+    var isSubmitting = false;
     String? errorText;
 
     await showDialog<void>(
@@ -451,66 +611,101 @@ class _DebtCard extends ConsumerWidget {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setModalState) => AlertDialog(
           title: Text('Bayar ${debt.counterpartyName}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Sisa kewajiban saat ini: ${RupiahFormatter.format(debt.remainingAmount)}',
-                style: SwissLedgerTypography.sans(
-                  fontSize: 12,
-                  color: SwissLedgerColors.textMuted,
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: amountCtrl,
-                keyboardType: TextInputType.number,
-                inputFormatters: const [RupiahInputFormatter()],
-                decoration: const InputDecoration(
-                  labelText: 'Nominal Bayar (Rp)',
-                  prefixText: 'Rp ',
-                ),
-              ),
-              if (errorText != null) ...[
-                const SizedBox(height: 8),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 Text(
-                  errorText!,
+                  'Sisa kewajiban saat ini: ${RupiahFormatter.format(debt.remainingAmount)}',
                   style: SwissLedgerTypography.sans(
                     fontSize: 12,
-                    color: SwissLedgerColors.dangerRed,
+                    color: SwissLedgerColors.textMuted,
                   ),
                 ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: const [RupiahInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: 'Nominal Bayar (Rp)',
+                    prefixText: 'Rp ',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: dateCtrl,
+                  readOnly: true,
+                  decoration: InputDecoration(
+                    labelText: 'Tanggal Pembayaran',
+                    suffixIcon: IconButton(
+                      icon: const Icon(
+                        PhosphorIconsRegular.calendarBlank,
+                        size: 16,
+                      ),
+                      onPressed: () async {
+                        final initial =
+                            DateTime.tryParse(dateCtrl.text.trim()) ??
+                            DateTime.now();
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: initial,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2100),
+                        );
+                        if (picked != null) {
+                          setModalState(() {
+                            dateCtrl.text = picked
+                                .toIso8601String()
+                                .substring(0, 10);
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    errorText!,
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 12,
+                      color: SwissLedgerColors.dangerRed,
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
+              onPressed: isSubmitting ? null : () => Navigator.of(ctx).pop(),
               child: const Text('Batal'),
             ),
             ElevatedButton(
-              onPressed: () async {
-                final amt = RupiahFormatter.parseDigits(amountCtrl.text);
-                if (amt <= 0 || amt > debt.remainingAmount) {
-                  setModalState(() {
-                    errorText =
-                        'Nominal bayar harus antara Rp 1 dan ${RupiahFormatter.format(debt.remainingAmount)}.';
-                  });
-                  return;
-                }
-                final repo = ref.read(debtRepositoryProvider);
-                if (repo == null) return;
-                final todayIso =
-                    DateTime.now().toIso8601String().substring(0, 10);
-                await repo.recordPayment(
-                  debtId: debt.id,
-                  amount: amt,
-                  paymentDate: todayIso,
-                  notes: 'Pembayaran kewajiban',
-                );
-                if (ctx.mounted) Navigator.of(ctx).pop();
-              },
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amt = RupiahFormatter.parseDigits(amountCtrl.text);
+                      if (amt <= 0 || amt > debt.remainingAmount) {
+                        setModalState(() {
+                          errorText =
+                              'Nominal bayar harus antara Rp 1 dan ${RupiahFormatter.format(debt.remainingAmount)}.';
+                        });
+                        return;
+                      }
+                      setModalState(() => isSubmitting = true);
+                      final repo = ref.read(debtRepositoryProvider);
+                      if (repo == null) return;
+                      await repo.recordPayment(
+                        debtId: debt.id,
+                        amount: amt,
+                        paymentDate: dateCtrl.text.trim(),
+                        notes: 'Pembayaran kewajiban',
+                      );
+                      if (ctx.mounted) Navigator.of(ctx).pop();
+                    },
               child: const Text('Simpan Pembayaran'),
             ),
           ],
@@ -642,9 +837,21 @@ class _DebtCard extends ConsumerWidget {
                 ],
               ),
               Wrap(
-                spacing: 6,
+                spacing: 4,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
+                  IconButton(
+                    key: Key('debt_history_${debt.id}'),
+                    tooltip: 'Riwayat Pembayaran',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        _showDebtPaymentHistorySheet(context, ref),
+                    icon: const Icon(
+                      PhosphorIconsRegular.clockCounterClockwise,
+                      size: 16,
+                      color: SwissLedgerColors.textMuted,
+                    ),
+                  ),
                   IconButton(
                     tooltip: 'Ubah',
                     visualDensity: VisualDensity.compact,
@@ -692,10 +899,14 @@ class _InstallmentsSubView extends ConsumerWidget {
 
   const _InstallmentsSubView({required this.db});
 
-  Future<void> _showCreatePlanDialog(BuildContext context, WidgetRef ref) async {
+  Future<void> _showCreatePlanDialog(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     final titleCtrl = TextEditingController();
     final totalCtrl = TextEditingController(text: '6.000.000');
     final countCtrl = TextEditingController(text: '7');
+    var isSubmitting = false;
     String? errorText;
 
     await showDialog<void>(
@@ -722,7 +933,9 @@ class _InstallmentsSubView extends ConsumerWidget {
                 children: [
                   TextField(
                     controller: titleCtrl,
-                    decoration: const InputDecoration(labelText: 'Nama Cicilan'),
+                    decoration: const InputDecoration(
+                      labelText: 'Nama Cicilan',
+                    ),
                   ),
                   const SizedBox(height: 10),
                   TextField(
@@ -769,31 +982,37 @@ class _InstallmentsSubView extends ConsumerWidget {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
+                onPressed: isSubmitting ? null : () => Navigator.of(ctx).pop(),
                 child: const Text('Batal'),
               ),
               ElevatedButton(
-                onPressed: () async {
-                  if (total <= 0 || count <= 0 || titleCtrl.text.trim().isEmpty) {
-                    setModalState(() {
-                      errorText =
-                          'Nama cicilan, total nominal, dan jumlah termin wajib diisi.';
-                    });
-                    return;
-                  }
-                  final repo = ref.read(installmentRepositoryProvider);
-                  if (repo == null) return;
-                  final todayIso =
-                      DateTime.now().toIso8601String().substring(0, 10);
-                  await repo.createPlanWithSchedule(
-                    title: titleCtrl.text.trim(),
-                    totalAmount: total,
-                    installmentCount: count,
-                    frequency: 'monthly',
-                    startDate: todayIso,
-                  );
-                  if (ctx.mounted) Navigator.of(ctx).pop();
-                },
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        if (total <= 0 ||
+                            count <= 0 ||
+                            titleCtrl.text.trim().isEmpty) {
+                          setModalState(() {
+                            errorText =
+                                'Nama cicilan, total nominal, dan jumlah termin wajib diisi.';
+                          });
+                          return;
+                        }
+                        setModalState(() => isSubmitting = true);
+                        final repo = ref.read(installmentRepositoryProvider);
+                        if (repo == null) return;
+                        final todayIso = DateTime.now()
+                            .toIso8601String()
+                            .substring(0, 10);
+                        await repo.createPlanWithSchedule(
+                          title: titleCtrl.text.trim(),
+                          totalAmount: total,
+                          installmentCount: count,
+                          frequency: 'monthly',
+                          startDate: todayIso,
+                        );
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                      },
                 child: const Text('Simpan Jadwal'),
               ),
             ],
@@ -885,6 +1104,147 @@ class _InstallmentPlanCard extends ConsumerWidget {
 
   const _InstallmentPlanCard({required this.item});
 
+  Future<void> _showPlanPaymentHistorySheet(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final db = ref.read(activeDatabaseProvider);
+    if (db == null) return;
+    final payments = await db.getPaymentsForPlan(item.plan.id);
+    if (!context.mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        decoration: const BoxDecoration(
+          color: SwissLedgerColors.surfaceElevated,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+          border: Border(
+            top: BorderSide(color: SwissLedgerColors.borderHairline, width: 1),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: SwissLedgerColors.borderHairline,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Riwayat Pembayaran · ${item.plan.title}',
+                style: SwissLedgerTypography.sans(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (payments.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Text(
+                    'Belum ada riwayat pembayaran termin untuk cicilan ini.',
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 12,
+                      color: SwissLedgerColors.textMuted,
+                    ),
+                  ),
+                )
+              else
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 320),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: payments.length,
+                    separatorBuilder: (_, _) => const Divider(
+                      height: 1,
+                      color: SwissLedgerColors.borderHairline,
+                    ),
+                    itemBuilder: (_, idx) {
+                      final p = payments[idx];
+                      final isReversed = p.status == 'reversed';
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    RupiahFormatter.format(p.amount),
+                                    style: SwissLedgerTypography.monoTabular(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: isReversed
+                                          ? SwissLedgerColors.textMuted
+                                          : SwissLedgerColors.textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${RupiahFormatter.formatIsoDate(p.paymentDate)} · ${isReversed ? 'Dikoreksi' : 'Tercatat'}',
+                                    style: SwissLedgerTypography.sans(
+                                      fontSize: 11,
+                                      color: SwissLedgerColors.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (!isReversed && p.linkedTransactionId != null)
+                              TextButton(
+                                onPressed: () async {
+                                  final txRepo = ref.read(
+                                    transactionRepositoryProvider,
+                                  );
+                                  if (txRepo == null) return;
+                                  await txRepo.reverseTransaction(
+                                    originalTransactionId:
+                                        p.linkedTransactionId!,
+                                    reversalDate: DateTime.now()
+                                        .toIso8601String()
+                                        .substring(0, 10),
+                                    notes:
+                                        'Koreksi pembayaran ${item.plan.title}',
+                                  );
+                                  if (ctx.mounted) Navigator.of(ctx).pop();
+                                },
+                                child: Text(
+                                  'Koreksi',
+                                  style: SwissLedgerTypography.sans(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: SwissLedgerColors.dangerRed,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _showEditPlanDialog(BuildContext context, WidgetRef ref) async {
     final titleCtrl = TextEditingController(text: item.plan.title);
     final vendorCtrl = TextEditingController(text: item.plan.vendorName ?? '');
@@ -961,38 +1321,126 @@ class _InstallmentPlanCard extends ConsumerWidget {
     await repo?.archivePlan(item.plan.id);
   }
 
-  Future<void> _confirmPayTerm(
+  Future<void> _showPayTermDialog(
     BuildContext context,
     WidgetRef ref,
     LocalInstallment nextTerm,
   ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Bayar Termin #${nextTerm.installmentNumber}'),
-        content: Text(
-          'Catat pembayaran "${item.plan.title} #${nextTerm.installmentNumber}" sebesar ${RupiahFormatter.format(nextTerm.remainingAmount)}? Saldo kas akan otomatis berkurang.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Batal'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Ya, Bayar Sekarang'),
-          ),
-        ],
-      ),
+    final amountCtrl = TextEditingController(
+      text: RupiahFormatter.formatNumberOnly(nextTerm.remainingAmount),
     );
-    if (confirmed != true) return;
-    final repo = ref.read(installmentRepositoryProvider);
-    if (repo == null) return;
-    final todayIso = DateTime.now().toIso8601String().substring(0, 10);
-    await repo.recordPayment(
-      installmentId: nextTerm.id,
-      amount: nextTerm.remainingAmount,
-      paymentDate: todayIso,
+    final dateCtrl = TextEditingController(
+      text: DateTime.now().toIso8601String().substring(0, 10),
+    );
+    var isSubmitting = false;
+    String? errorText;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: Text('Bayar Termin #${nextTerm.installmentNumber}'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '${item.plan.title} · Sisa termin: ${RupiahFormatter.format(nextTerm.remainingAmount)}',
+                  style: SwissLedgerTypography.sans(
+                    fontSize: 12,
+                    color: SwissLedgerColors.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const Key('installment_pay_amount_field'),
+                  controller: amountCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: const [RupiahInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: 'Nominal Pembayaran (Rp)',
+                    prefixText: 'Rp ',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: dateCtrl,
+                  readOnly: true,
+                  decoration: InputDecoration(
+                    labelText: 'Tanggal Pembayaran',
+                    suffixIcon: IconButton(
+                      icon: const Icon(
+                        PhosphorIconsRegular.calendarBlank,
+                        size: 16,
+                      ),
+                      onPressed: () async {
+                        final initial =
+                            DateTime.tryParse(dateCtrl.text.trim()) ??
+                            DateTime.now();
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: initial,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2100),
+                        );
+                        if (picked != null) {
+                          setModalState(() {
+                            dateCtrl.text = picked
+                                .toIso8601String()
+                                .substring(0, 10);
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    errorText!,
+                    style: SwissLedgerTypography.sans(
+                      fontSize: 12,
+                      color: SwissLedgerColors.dangerRed,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.of(ctx).pop(),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              key: const Key('installment_pay_submit_button'),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amt = RupiahFormatter.parseDigits(amountCtrl.text);
+                      if (amt <= 0 || amt > nextTerm.remainingAmount) {
+                        setModalState(() {
+                          errorText =
+                              'Nominal bayar harus antara Rp 1 dan ${RupiahFormatter.format(nextTerm.remainingAmount)}.';
+                        });
+                        return;
+                      }
+                      setModalState(() => isSubmitting = true);
+                      final repo = ref.read(installmentRepositoryProvider);
+                      if (repo == null) return;
+                      await repo.recordPayment(
+                        installmentId: nextTerm.id,
+                        amount: amt,
+                        paymentDate: dateCtrl.text.trim(),
+                      );
+                      if (ctx.mounted) Navigator.of(ctx).pop();
+                    },
+              child: const Text('Simpan Pembayaran'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1064,7 +1512,9 @@ class _InstallmentPlanCard extends ConsumerWidget {
                     decoration: BoxDecoration(
                       color: item.terms[i].status == 'paid'
                           ? SwissLedgerColors.accentTeal
-                          : SwissLedgerColors.surfaceSubtle,
+                          : (item.terms[i].status == 'partial'
+                                ? SwissLedgerColors.warningAmber
+                                : SwissLedgerColors.surfaceSubtle),
                       borderRadius: BorderRadius.circular(3),
                     ),
                   ),
@@ -1129,6 +1579,17 @@ class _InstallmentPlanCard extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               IconButton(
+                key: Key('plan_history_${plan.id}'),
+                tooltip: 'Riwayat Pembayaran',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _showPlanPaymentHistorySheet(context, ref),
+                icon: const Icon(
+                  PhosphorIconsRegular.clockCounterClockwise,
+                  size: 16,
+                  color: SwissLedgerColors.textMuted,
+                ),
+              ),
+              IconButton(
                 tooltip: 'Ubah Cicilan',
                 visualDensity: VisualDensity.compact,
                 onPressed: () => _showEditPlanDialog(context, ref),
@@ -1151,7 +1612,7 @@ class _InstallmentPlanCard extends ConsumerWidget {
               if (nextTerm != null) ...[
                 const SizedBox(width: 6),
                 OutlinedButton(
-                  onPressed: () => _confirmPayTerm(context, ref, nextTerm),
+                  onPressed: () => _showPayTermDialog(context, ref, nextTerm),
                   child: Text(
                     'Bayar Termin #${nextTerm.installmentNumber}',
                     style: SwissLedgerTypography.sans(

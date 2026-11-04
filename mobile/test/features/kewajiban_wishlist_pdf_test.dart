@@ -8,6 +8,7 @@ import 'package:personal_finance/app/shell/main_shell_screen.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/features/auth/data/auth_repository.dart';
+import 'package:personal_finance/features/budgets/data/budget_repository.dart';
 import 'package:personal_finance/features/debts/data/debt_repository.dart';
 import 'package:personal_finance/features/installments/data/installment_repository.dart';
 import 'package:personal_finance/features/reports/data/backup_export_service.dart';
@@ -22,6 +23,7 @@ void main() {
   late DebtRepository debtRepo;
   late WishlistRepository wishlistRepo;
   late TransactionRepository txRepo;
+  late BudgetRepository budgetRepo;
 
   setUp(() async {
     db = AppDatabase.inMemory(userId: 'user-anzhel-uuid');
@@ -31,6 +33,7 @@ void main() {
     debtRepo = DebtRepository(db);
     wishlistRepo = WishlistRepository(db);
     txRepo = TransactionRepository(db);
+    budgetRepo = BudgetRepository(db);
   });
 
   tearDown(() async {
@@ -38,10 +41,20 @@ void main() {
   });
 
   testWidgets(
-    '7-term installment plan renders in Kewajiban tab and Wishlist purchase does not alter cash balance',
+    '7-term installment plan renders in Kewajiban tab, supports partial payment, and Wishlist filter chips, budgets, analytics & settings work',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(430, 932));
       addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final now = DateTime.now();
+      final currentYearMonth =
+          '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
+      final expenseCats = await db.getActiveCategories(kind: 'expense');
+      await budgetRepo.upsertBudget(
+        categoryId: expenseCats.first.id,
+        periodMonth: currentYearMonth,
+        limitAmount: 1000000,
+      );
 
       final planId = await installmentRepo.createPlanWithSchedule(
         title: 'Kredit Kamera 7 Bulan',
@@ -91,6 +104,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      // Verify Buku Kas shows budget management button
+      expect(find.byKey(const Key('manage_budgets_button')), findsOneWidget);
+
       // Navigate to Kewajiban tab
       await tester.tap(find.byKey(const Key('nav_tab_kewajiban')));
       await tester.pumpAndSettle();
@@ -101,6 +117,20 @@ void main() {
 
       expect(find.text('Kredit Kamera 7 Bulan'), findsOneWidget);
       expect(find.textContaining('1/7'), findsWidgets);
+
+      // Pay partial amount (300000) on Term #2 via the dialog
+      await tester.tap(find.text('Bayar Termin #2'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('installment_pay_amount_field')),
+        '300000',
+      );
+      await tester.tap(find.byKey(const Key('installment_pay_submit_button')));
+      await tester.pumpAndSettle();
+
+      final updatedTerm2 = await db.getInstallmentById(terms[1].id);
+      expect(updatedTerm2!.paidAmount, 300000);
+      expect(updatedTerm2.status, 'partial');
 
       // Navigate to Wishlist tab
       await tester.tap(find.byKey(const Key('nav_tab_wishlist')));
@@ -117,6 +147,17 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      // Filter by 'Aktif' chip -> Meja Kerja Kayu (purchased) is hidden, Sepatu Lari is shown
+      await tester.tap(find.byKey(const Key('wishlist_filter_active')));
+      await tester.pumpAndSettle();
+      expect(find.text('Sepatu Lari'), findsOneWidget);
+      expect(find.text('Meja Kerja Kayu'), findsNothing);
+
+      // Filter back to 'Semua'
+      await tester.tap(find.byKey(const Key('wishlist_filter_all')));
+      await tester.pumpAndSettle();
+      expect(find.text('Meja Kerja Kayu'), findsOneWidget);
+
       await tester.tap(find.byKey(Key('wishlist_add_savings_$savingItemId')));
       await tester.pumpAndSettle();
       await tester.enterText(
@@ -128,11 +169,28 @@ void main() {
 
       final updatedWishlist = await db.getWishlistById(savingItemId);
       expect(updatedWishlist!.savedAmount, 500000);
+
+      // Navigate to Laporan & Lainnya tab
+      await tester.tap(find.byKey(const Key('nav_tab_laporan')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('ANALITIK PENGELUARAN & METODE PEMBAYARAN'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('manage_categories_button')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('manage_profile_button')),
+        findsOneWidget,
+      );
     },
   );
 
   test(
-    'PdfReportGenerator.generatePeriodReport produces valid %PDF- bytes offline and BackupExportService exports and restores valid JSON',
+    'PdfReportGenerator.generatePeriodReport produces valid %PDF- bytes offline with emoji sanitization and BackupExportService exports and restores valid JSON including budgets',
     () async {
       final cats = await db.getActiveCategories(kind: 'expense');
       await txRepo.createTransaction(
@@ -140,7 +198,13 @@ void main() {
         amount: 125000,
         categoryId: cats.first.id,
         transactionDate: '2026-10-17',
-        title: 'Makan Siang Tim',
+        title: 'Makan Siang Tim 🍜 — QRIS',
+        notes: '[Metode: QRIS / E-Wallet] Warung Padang',
+      );
+      await budgetRepo.upsertBudget(
+        categoryId: cats.first.id,
+        periodMonth: '2026-10',
+        limitAmount: 500000,
       );
       await debtRepo.createDebt(
         direction: 'payable',
@@ -151,9 +215,14 @@ void main() {
         title: 'Pinjaman Darurat',
       );
 
+      expect(
+        PdfReportGenerator.sanitizePdfText('Makan Siang Tim 🍜 — QRIS · Tunai'),
+        'Makan Siang Tim - QRIS | Tunai',
+      );
+
       final pdfBytes = await PdfReportGenerator.generatePeriodReport(
         db: db,
-        accountDisplayName: 'Anzhel',
+        accountDisplayName: 'Anzhel ✨',
         periodLabel: '2026-10',
       );
 
@@ -166,12 +235,14 @@ void main() {
       expect(decoded['user_id'], 'user-anzhel-uuid');
       expect((decoded['transactions'] as List).length, 1);
       expect((decoded['debts'] as List).length, 1);
+      expect((decoded['budgets'] as List).length, 1);
 
       final restoredDb = AppDatabase.inMemory(userId: 'user-anzhel-uuid');
       await restoredDb.ensureDefaultCategoriesSeeded();
       await BackupExportService.restoreFromJsonString(restoredDb, backupJson);
       expect((await restoredDb.getActiveTransactions()).length, 1);
       expect((await restoredDb.getActiveDebts()).length, 1);
+      expect((await restoredDb.getActiveBudgets(periodMonth: '2026-10')).length, 1);
       await restoredDb.close();
     },
   );

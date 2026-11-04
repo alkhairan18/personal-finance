@@ -116,6 +116,8 @@ class WishlistRepository {
           'saved_amount': newSavedAmount,
           'priority': item.priority,
           'target_date': item.targetDate,
+          'url_or_reference': item.urlOrReference,
+          'notes': item.notes,
           'status': newStatus,
         },
       );
@@ -127,6 +129,11 @@ class WishlistRepository {
     required String itemName,
     required int targetAmount,
     required String priority,
+    String? targetDate,
+    String? notes,
+    String? urlOrReference,
+    String? status,
+    bool updateOptionalFields = false,
   }) async {
     final item = await db.getWishlistById(wishlistId);
     if (item == null) return;
@@ -136,20 +143,39 @@ class WishlistRepository {
 
     final opId = _uuid.v4();
     final nowIso = DateTime.now().toUtc().toIso8601String();
-    final newStatus = item.status == 'purchased'
-        ? 'purchased'
-        : (item.savedAmount >= targetAmount
-            ? 'ready_to_buy'
-            : (item.savedAmount > 0 ? 'saving' : 'planned'));
+    final resolvedTargetDate =
+        updateOptionalFields ? targetDate : (targetDate ?? item.targetDate);
+    final resolvedNotes =
+        updateOptionalFields ? notes : (notes ?? item.notes);
+    final resolvedUrl = updateOptionalFields
+        ? urlOrReference
+        : (urlOrReference ?? item.urlOrReference);
+    final newStatus = status ??
+        (item.status == 'purchased' || item.status == 'cancelled'
+            ? item.status
+            : (item.savedAmount >= targetAmount
+                ? 'ready_to_buy'
+                : (item.savedAmount > 0 ? 'saving' : 'planned')));
 
     await db.transaction(() async {
       db.execute(
         '''
         UPDATE local_wishlists
-        SET item_name = ?, target_amount = ?, priority = ?, status = ?, version = version + 1, sync_status = 'pending_update', updated_at = ?
+        SET item_name = ?, target_amount = ?, priority = ?, target_date = ?, url_or_reference = ?, notes = ?, status = ?, version = version + 1, sync_status = 'pending_update', updated_at = ?
         WHERE id = ? AND user_id = ?
         ''',
-        [itemName, targetAmount, priority, newStatus, nowIso, wishlistId, db.userId],
+        [
+          itemName,
+          targetAmount,
+          priority,
+          resolvedTargetDate,
+          resolvedUrl,
+          resolvedNotes,
+          newStatus,
+          nowIso,
+          wishlistId,
+          db.userId,
+        ],
       );
 
       db.enqueueOutbox(
@@ -163,8 +189,46 @@ class WishlistRepository {
           'target_amount': targetAmount,
           'saved_amount': item.savedAmount,
           'priority': priority,
-          'target_date': item.targetDate,
+          'target_date': resolvedTargetDate,
+          'url_or_reference': resolvedUrl,
+          'notes': resolvedNotes,
           'status': newStatus,
+        },
+      );
+    });
+  }
+
+  Future<void> markCancelled(String wishlistId) async {
+    final item = await db.getWishlistById(wishlistId);
+    if (item == null) return;
+    final opId = _uuid.v4();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    await db.transaction(() async {
+      db.execute(
+        '''
+        UPDATE local_wishlists
+        SET status = 'cancelled', version = version + 1, sync_status = 'pending_update', updated_at = ?
+        WHERE id = ? AND user_id = ?
+        ''',
+        [nowIso, wishlistId, db.userId],
+      );
+
+      db.enqueueOutbox(
+        operationId: opId,
+        entityType: 'wishlist',
+        entityId: wishlistId,
+        operationType: 'update',
+        baseVersion: item.version,
+        payload: {
+          'item_name': item.itemName,
+          'target_amount': item.targetAmount,
+          'saved_amount': item.savedAmount,
+          'priority': item.priority,
+          'target_date': item.targetDate,
+          'url_or_reference': item.urlOrReference,
+          'notes': item.notes,
+          'status': 'cancelled',
         },
       );
     });
@@ -224,6 +288,9 @@ class WishlistRepository {
           'target_amount': item.targetAmount,
           'saved_amount': item.targetAmount,
           'priority': item.priority,
+          'target_date': item.targetDate,
+          'url_or_reference': item.urlOrReference,
+          'notes': item.notes,
           'status': 'purchased',
         },
       );
