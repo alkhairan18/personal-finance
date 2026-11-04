@@ -20,6 +20,12 @@ class SupabaseSchemaContractTest extends TestCase
         $this->assertStringContainsString('CREATE OR REPLACE FUNCTION public.app_logout(', $sql);
         $this->assertStringContainsString('CREATE OR REPLACE FUNCTION public.sync_push(', $sql);
         $this->assertStringContainsString('CREATE OR REPLACE FUNCTION public.sync_pull(', $sql);
+        $this->assertStringContainsString('CREATE TABLE IF NOT EXISTS public.budgets', $sql);
+        $this->assertStringContainsString('CREATE OR REPLACE FUNCTION public.app_update_profile(', $sql);
+        $this->assertStringContainsString('INSERT INTO public.debts', $sql);
+        $this->assertStringContainsString('INSERT INTO public.installment_plans', $sql);
+        $this->assertStringContainsString('INSERT INTO public.installments', $sql);
+        $this->assertStringContainsString('INSERT INTO public.budgets', $sql);
         $this->assertStringContainsString('ENABLE ROW LEVEL SECURITY', $sql);
 
         $guidePath = base_path('../supabase/PANDUAN_SUPABASE.md');

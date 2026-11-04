@@ -184,6 +184,18 @@ CREATE TABLE IF NOT EXISTS public.wishlists (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS public.budgets (
+  id uuid PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES public.app_users(id) ON DELETE CASCADE,
+  category_id uuid REFERENCES public.categories(id) ON DELETE SET NULL,
+  period_month text NOT NULL,
+  limit_amount bigint NOT NULL CHECK (limit_amount > 0),
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS public.sync_operations (
   operation_id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES public.app_users(id) ON DELETE CASCADE,
@@ -219,6 +231,7 @@ ALTER TABLE public.installment_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.installments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.installment_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.wishlists ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.budgets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sync_operations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sync_changes ENABLE ROW LEVEL SECURITY;
 
@@ -262,7 +275,7 @@ BEGIN
   SELECT d.user_id INTO v_user_id
   FROM public.app_devices d
   JOIN public.app_users u ON u.id = d.user_id
-  WHERE d.token_hash = v_hash
+  Where d.token_hash = v_hash
     AND d.revoked_at IS NULL
     AND (d.expires_at IS NULL OR d.expires_at > now())
     AND u.is_active = true
@@ -409,6 +422,61 @@ BEGIN
   WHERE token_hash = v_hash;
 
   RETURN jsonb_build_object('data', jsonb_build_object('logged_out', true));
+END;
+$$;
+
+-- 8b. RPC: Update Profile & Password
+CREATE OR REPLACE FUNCTION public.app_update_profile(
+  p_token text,
+  p_name text,
+  p_current_password text DEFAULT NULL,
+  p_new_password text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+  v_user_id uuid;
+  v_user public.app_users%ROWTYPE;
+  v_name text := trim(coalesce(p_name, ''));
+BEGIN
+  v_user_id := public.verify_app_token(p_token);
+  SELECT * INTO v_user FROM public.app_users WHERE id = v_user_id;
+
+  IF v_name = '' THEN
+    RAISE EXCEPTION 'VALIDATION_ERROR: Nama tampilan tidak boleh kosong.';
+  END IF;
+
+  IF p_new_password IS NOT NULL AND trim(p_new_password) != '' THEN
+    IF length(p_new_password) < 8 THEN
+      RAISE EXCEPTION 'VALIDATION_ERROR: Kata sandi baru minimal 8 karakter.';
+    END IF;
+    IF p_current_password IS NOT NULL AND trim(p_current_password) != '' THEN
+      IF v_user.password_hash != crypt(p_current_password, v_user.password_hash) THEN
+        RAISE EXCEPTION 'VALIDATION_ERROR: Kata sandi saat ini tidak sesuai.';
+      END IF;
+    END IF;
+    UPDATE public.app_users
+    SET name = v_name,
+        password_hash = crypt(p_new_password, gen_salt('bf')),
+        updated_at = now()
+    WHERE id = v_user_id;
+  ELSE
+    UPDATE public.app_users
+    SET name = v_name,
+        updated_at = now()
+    WHERE id = v_user_id;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'data', jsonb_build_object(
+      'id', v_user_id,
+      'name', v_name,
+      'username', v_user.username
+    )
+  );
 END;
 $$;
 
@@ -565,7 +633,173 @@ BEGIN
       VALUES (v_user_id, 'wishlist', v_entity_id, v_new_version, 'upsert', v_payload || jsonb_build_object('id', v_entity_id, 'version', v_new_version));
 
     ELSE
-      -- Generic sync change log for debt, debt_payment, installment_plan, installment_payment, category
+      IF v_entity_type = 'category' THEN
+        IF v_action = 'archive' THEN
+          UPDATE public.categories SET archived_at = now(), updated_at = now() WHERE id = v_entity_id AND user_id = v_user_id;
+        ELSE
+          INSERT INTO public.categories (id, user_id, name, type, icon_key, is_system, version)
+          VALUES (
+            v_entity_id,
+            v_user_id,
+            coalesce(v_payload->>'name', 'Kategori'),
+            coalesce(v_payload->>'type', v_payload->>'kind', 'expense'),
+            coalesce(v_payload->>'icon_key', 'receipt'),
+            false,
+            v_new_version
+          )
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            icon_key = EXCLUDED.icon_key,
+            version = EXCLUDED.version,
+            updated_at = now()
+          WHERE public.categories.user_id = v_user_id;
+        END IF;
+
+      ELSIF v_entity_type = 'debt' THEN
+        IF v_action = 'archive' THEN
+          UPDATE public.debts SET status = 'archived', archived_at = now(), updated_at = now() WHERE id = v_entity_id AND user_id = v_user_id;
+        ELSE
+          INSERT INTO public.debts (
+            id, user_id, direction, counterparty, principal_amount, start_date, due_date, note, status, version
+          ) VALUES (
+            v_entity_id,
+            v_user_id,
+            coalesce(v_payload->>'direction', 'payable'),
+            coalesce(v_payload->>'counterparty', v_payload->>'counterparty_name', '-'),
+            coalesce((v_payload->>'principal_amount')::bigint, 1),
+            coalesce(NULLIF(v_payload->>'start_date', '')::date, current_date),
+            NULLIF(v_payload->>'due_date', '')::date,
+            coalesce(v_payload->>'note', v_payload->>'title', v_payload->>'notes'),
+            coalesce(v_payload->>'status', 'active'),
+            v_new_version
+          )
+          ON CONFLICT (id) DO UPDATE SET
+            counterparty = EXCLUDED.counterparty,
+            principal_amount = EXCLUDED.principal_amount,
+            due_date = EXCLUDED.due_date,
+            note = EXCLUDED.note,
+            status = EXCLUDED.status,
+            version = EXCLUDED.version,
+            updated_at = now()
+          WHERE public.debts.user_id = v_user_id;
+        END IF;
+
+      ELSIF v_entity_type = 'debt_payment' AND v_action = 'record_debt_payment' THEN
+        INSERT INTO public.debt_payments (
+          id, user_id, debt_id, transaction_id, amount, paid_at, note, status
+        ) VALUES (
+          v_entity_id,
+          v_user_id,
+          (v_payload->>'debt_id')::uuid,
+          NULLIF(v_payload->>'transaction_id', '')::uuid,
+          coalesce((v_payload->>'amount')::bigint, 1),
+          coalesce(NULLIF(v_payload->>'paid_at', '')::date, current_date),
+          v_payload->>'note',
+          'active'
+        ) ON CONFLICT (id) DO NOTHING;
+
+      ELSIF v_entity_type = 'debt_payment' AND v_action = 'reverse_debt_payment' THEN
+        UPDATE public.debt_payments SET status = 'reversed', updated_at = now()
+        WHERE id = v_entity_id AND user_id = v_user_id;
+
+      ELSIF v_entity_type = 'installment_plan' THEN
+        IF v_action = 'archive' THEN
+          UPDATE public.installment_plans SET status = 'archived', archived_at = now(), updated_at = now() WHERE id = v_entity_id AND user_id = v_user_id;
+        ELSE
+          INSERT INTO public.installment_plans (
+            id, user_id, title, vendor, total_amount, installment_count, frequency, start_date, note, status, version
+          ) VALUES (
+            v_entity_id,
+            v_user_id,
+            coalesce(v_payload->>'title', 'Cicilan'),
+            v_payload->>'vendor_name',
+            coalesce((v_payload->>'total_amount')::bigint, 1),
+            coalesce((v_payload->>'installment_count')::integer, 1),
+            coalesce(v_payload->>'frequency', 'monthly'),
+            coalesce(NULLIF(v_payload->>'start_date', '')::date, current_date),
+            coalesce(v_payload->>'note', v_payload->>'notes'),
+            coalesce(v_payload->>'status', 'active'),
+            v_new_version
+          )
+          ON CONFLICT (id) DO UPDATE SET
+            title = EXCLUDED.title,
+            vendor = EXCLUDED.vendor,
+            note = EXCLUDED.note,
+            status = EXCLUDED.status,
+            version = EXCLUDED.version,
+            updated_at = now()
+          WHERE public.installment_plans.user_id = v_user_id;
+
+          IF jsonb_typeof(v_payload->'installments') = 'array' THEN
+            INSERT INTO public.installments (
+              id, user_id, installment_plan_id, sequence_no, due_date, amount, paid_amount, status, version
+            )
+            SELECT
+              (term->>'id')::uuid,
+              v_user_id,
+              v_entity_id,
+              coalesce((term->>'sequence_no')::integer, (term->>'installment_number')::integer, 1),
+              coalesce(NULLIF(term->>'due_date', '')::date, current_date),
+              coalesce((term->>'planned_amount')::bigint, (term->>'amount')::bigint, 1),
+              coalesce((term->>'paid_amount')::bigint, 0),
+              coalesce(term->>'status', 'pending'),
+              1
+            FROM jsonb_array_elements(v_payload->'installments') AS term
+            WHERE term->>'id' IS NOT NULL
+            ON CONFLICT (id) DO UPDATE SET
+              paid_amount = EXCLUDED.paid_amount,
+              status = EXCLUDED.status,
+              updated_at = now()
+            WHERE public.installments.user_id = v_user_id;
+          END IF;
+        END IF;
+
+      ELSIF v_entity_type = 'installment_payment' AND v_action = 'record_installment_payment' THEN
+        INSERT INTO public.installment_payments (
+          id, user_id, installment_id, transaction_id, amount, paid_at, note, status
+        ) VALUES (
+          v_entity_id,
+          v_user_id,
+          (v_payload->>'installment_id')::uuid,
+          NULLIF(v_payload->>'transaction_id', '')::uuid,
+          coalesce((v_payload->>'amount')::bigint, 1),
+          coalesce(NULLIF(v_payload->>'paid_at', '')::date, current_date),
+          v_payload->>'note',
+          'active'
+        ) ON CONFLICT (id) DO NOTHING;
+
+        UPDATE public.installments
+        SET paid_amount = paid_amount + coalesce((v_payload->>'amount')::bigint, 0),
+            status = CASE WHEN paid_amount + coalesce((v_payload->>'amount')::bigint, 0) >= amount THEN 'paid' ELSE 'partial' END,
+            paid_at = now(),
+            updated_at = now()
+        WHERE id = (v_payload->>'installment_id')::uuid AND user_id = v_user_id;
+
+      ELSIF v_entity_type = 'installment_payment' AND v_action = 'reverse_installment_payment' THEN
+        UPDATE public.installment_payments SET status = 'reversed', updated_at = now()
+        WHERE id = v_entity_id AND user_id = v_user_id;
+
+      ELSIF v_entity_type = 'budget' THEN
+        INSERT INTO public.budgets (
+          id, user_id, category_id, period_month, limit_amount, status, version
+        ) VALUES (
+          v_entity_id,
+          v_user_id,
+          NULLIF(v_payload->>'category_id', '')::uuid,
+          coalesce(v_payload->>'period_month', to_char(current_date, 'YYYY-MM')),
+          coalesce((v_payload->>'limit_amount')::bigint, 1),
+          CASE WHEN v_action = 'archive' THEN 'archived' ELSE coalesce(v_payload->>'status', 'active') END,
+          v_new_version
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          limit_amount = EXCLUDED.limit_amount,
+          status = EXCLUDED.status,
+          version = EXCLUDED.version,
+          updated_at = now()
+        WHERE public.budgets.user_id = v_user_id;
+      END IF;
+
+      -- Append to cursor change log
       INSERT INTO public.sync_changes (user_id, entity_type, entity_id, entity_version, operation, payload)
       VALUES (
         v_user_id,
@@ -668,5 +902,6 @@ $$;
 GRANT EXECUTE ON FUNCTION public.app_register(text, text, text, uuid, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.app_login(text, text, uuid, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.app_logout(text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.app_update_profile(text, text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.sync_push(text, uuid, jsonb) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.sync_pull(text, text, integer) TO anon, authenticated;
