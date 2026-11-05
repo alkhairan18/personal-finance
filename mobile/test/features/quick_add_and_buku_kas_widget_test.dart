@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:personal_finance/app/providers/app_providers.dart';
 import 'package:personal_finance/app/shell/main_shell_screen.dart';
+import 'package:personal_finance/main.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/core/network/api_client.dart';
@@ -210,6 +211,38 @@ void main() {
       expect(await db.getPendingOutboxCount(), 0);
       expect(find.text('Tersinkron'), findsOneWidget);
       expect(find.text('Data Anda Sudah Diterima'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'PersonalFinanceApp opens with logo-only animated splash screen and transitions to Buku Kas',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(430, 932));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            authRepositoryProvider.overrideWith((ref) => authRepo),
+          ],
+          child: const PersonalFinanceApp(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final splashRoot = find.byKey(const Key('splash_screen_root'));
+      expect(splashRoot, findsOneWidget);
+      expect(find.byKey(const Key('splash_logo_image')), findsOneWidget);
+      expect(
+        find.descendant(of: splashRoot, matching: find.byType(Text)),
+        findsNothing,
+      );
+
+      await tester.pump(const Duration(milliseconds: 1200));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('splash_screen_root')), findsNothing);
+      expect(find.text('Buku Kas'), findsWidgets);
     },
   );
 }
