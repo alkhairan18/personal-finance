@@ -27,6 +27,9 @@ class SupabaseSchemaContractTest extends TestCase
         $this->assertStringContainsString('INSERT INTO public.installments', $sql);
         $this->assertStringContainsString('INSERT INTO public.budgets', $sql);
         $this->assertStringContainsString('ENABLE ROW LEVEL SECURITY', $sql);
+        $this->assertStringNotContainsString('digest(', $sql);
+        $this->assertStringContainsString('sha256(convert_to(', $sql);
+        $this->assertStringContainsString("NOTIFY pgrst, 'reload schema';", $sql);
 
         $guidePath = base_path('../supabase/PANDUAN_SUPABASE.md');
         $this->assertFileExists($guidePath);

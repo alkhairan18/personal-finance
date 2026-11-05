@@ -26,7 +26,7 @@ BEGIN
     RETURN '22222222-2222-4222-8222-000000000002'::uuid;
   END IF;
 
-  v_hex := encode(digest('pf-user-id-v1:' || v_clean, 'sha256'), 'hex');
+  v_hex := encode(pg_catalog.sha256(convert_to('pf-user-id-v1:' || v_clean, 'UTF8')), 'hex');
   RETURN (
     substr(v_hex, 1, 8) || '-' ||
     substr(v_hex, 9, 4) || '-4' ||
@@ -271,7 +271,7 @@ BEGIN
     RAISE EXCEPTION 'UNAUTHENTICATED: Token sesi tidak ditemukan.';
   END IF;
 
-  v_hash := encode(digest(trim(p_token), 'sha256'), 'hex');
+  v_hash := encode(pg_catalog.sha256(convert_to(trim(p_token), 'UTF8')), 'hex');
   SELECT d.user_id INTO v_user_id
   FROM public.app_devices d
   JOIN public.app_users u ON u.id = d.user_id
@@ -323,8 +323,8 @@ BEGIN
   INSERT INTO public.app_users (id, name, username, password_hash, is_active)
   VALUES (v_user_id, v_name, v_username, crypt(p_password, gen_salt('bf')), true);
 
-  v_raw_token := encode(gen_random_bytes(32), 'hex');
-  v_token_hash := encode(digest(v_raw_token, 'sha256'), 'hex');
+  v_raw_token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  v_token_hash := encode(pg_catalog.sha256(convert_to(v_raw_token, 'UTF8')), 'hex');
 
   INSERT INTO public.app_devices (id, user_id, device_name, token_hash, expires_at, revoked_at, last_seen_at)
   VALUES (p_device_id, v_user_id, coalesce(p_device_name, 'Android Pribadi'), v_token_hash, v_expires, NULL, now())
@@ -379,8 +379,8 @@ BEGIN
     RAISE EXCEPTION 'UNAUTHENTICATED: Username atau kata sandi tidak sesuai.';
   END IF;
 
-  v_raw_token := encode(gen_random_bytes(32), 'hex');
-  v_token_hash := encode(digest(v_raw_token, 'sha256'), 'hex');
+  v_raw_token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  v_token_hash := encode(pg_catalog.sha256(convert_to(v_raw_token, 'UTF8')), 'hex');
 
   INSERT INTO public.app_devices (id, user_id, device_name, token_hash, expires_at, revoked_at, last_seen_at)
   VALUES (p_device_id, v_user.id, coalesce(p_device_name, 'Android Pribadi'), v_token_hash, v_expires, NULL, now())
@@ -415,7 +415,7 @@ SECURITY DEFINER
 SET search_path = public, extensions
 AS $$
 DECLARE
-  v_hash text := encode(digest(trim(coalesce(p_token, '')), 'sha256'), 'hex');
+  v_hash text := encode(pg_catalog.sha256(convert_to(trim(coalesce(p_token, '')), 'UTF8')), 'hex');
 BEGIN
   UPDATE public.app_devices
   SET revoked_at = now(), token_hash = NULL
@@ -913,3 +913,4 @@ GRANT EXECUTE ON FUNCTION public.app_logout(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.app_update_profile(text, text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.sync_push(text, uuid, jsonb) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.sync_pull(text, text, integer) TO anon, authenticated;
+NOTIFY pgrst, 'reload schema';
