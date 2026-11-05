@@ -59,7 +59,7 @@ class _PersonalFinanceAppState extends ConsumerState<PersonalFinanceApp> {
       darkTheme: SwissLedgerTheme.dark(),
       themeMode: ThemeMode.light,
       home: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 240),
+        duration: const Duration(milliseconds: 380),
         switchInCurve: _strongEaseOut,
         switchOutCurve: _strongEaseOut,
         transitionBuilder: (child, animation) {

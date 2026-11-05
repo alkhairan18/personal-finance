@@ -239,6 +239,10 @@ void main() {
       );
 
       await tester.pump(const Duration(milliseconds: 1200));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(const Key('splash_screen_root')), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 1200));
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('splash_screen_root')), findsNothing);

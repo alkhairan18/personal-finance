@@ -4,7 +4,7 @@ import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
 /// Modern logo-only animated splash screen following Emil Kowalski's animation
 /// principles (`animate` & `emil-design-eng`):
 /// - Animates only GPU-friendly `transform` (`scale`, `translate`) and `opacity`.
-/// - Never starts from `scale(0)` (`0.92 -> 1.0`).
+/// - Never starts from `scale(0)` (`0.90 -> 1.0`).
 /// - Uses strong custom ease-out `Cubic(0.23, 1.0, 0.32, 1.0)`.
 /// - Respects `MediaQuery.maybeDisableAnimationsOf(context)`.
 class AppSplashScreen extends StatefulWidget {
@@ -14,7 +14,7 @@ class AppSplashScreen extends StatefulWidget {
   const AppSplashScreen({
     super.key,
     required this.onCompleted,
-    this.duration = const Duration(milliseconds: 950),
+    this.duration = const Duration(milliseconds: 2400),
   });
 
   @override
@@ -44,42 +44,42 @@ class _AppSplashScreenState extends State<AppSplashScreen>
 
     _opacityAnim = CurvedAnimation(
       parent: _controller,
-      curve: const Interval(0.0, 0.48, curve: _strongEaseOut),
+      curve: const Interval(0.08, 0.48, curve: _strongEaseOut),
     );
-    _scaleAnim = Tween<double>(begin: 0.92, end: 1.0).animate(
+    _scaleAnim = Tween<double>(begin: 0.90, end: 1.0).animate(
       CurvedAnimation(
         parent: _controller,
-        curve: const Interval(0.0, 0.62, curve: _strongEaseOut),
+        curve: const Interval(0.08, 0.56, curve: _strongEaseOut),
       ),
     );
-    _translateYAnim = Tween<double>(begin: 8.0, end: 0.0).animate(
+    _translateYAnim = Tween<double>(begin: 12.0, end: 0.0).animate(
       CurvedAnimation(
         parent: _controller,
-        curve: const Interval(0.0, 0.62, curve: _strongEaseOut),
+        curve: const Interval(0.08, 0.56, curve: _strongEaseOut),
       ),
     );
-    _glowScaleAnim = Tween<double>(begin: 0.92, end: 1.18).animate(
+    _glowScaleAnim = Tween<double>(begin: 0.92, end: 1.22).animate(
       CurvedAnimation(
         parent: _controller,
-        curve: const Interval(0.08, 0.95, curve: _strongEaseOut),
+        curve: const Interval(0.14, 0.94, curve: _strongEaseOut),
       ),
     );
     _glowOpacityAnim = TweenSequence<double>([
       TweenSequenceItem(
-        tween: Tween<double>(begin: 0.0, end: 0.36)
+        tween: Tween<double>(begin: 0.0, end: 0.38)
             .chain(CurveTween(curve: _strongEaseOut)),
-        weight: 45,
+        weight: 48,
       ),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 0.36, end: 0.14)
+        tween: Tween<double>(begin: 0.38, end: 0.16)
             .chain(CurveTween(curve: _strongEaseInOut)),
-        weight: 55,
+        weight: 52,
       ),
     ]).animate(_controller);
     _sheenSlideAnim = Tween<double>(begin: -1.4, end: 1.4).animate(
       CurvedAnimation(
         parent: _controller,
-        curve: const Interval(0.20, 0.88, curve: _strongEaseInOut),
+        curve: const Interval(0.34, 0.86, curve: _strongEaseInOut),
       ),
     );
 
@@ -167,7 +167,7 @@ class _AppSplashScreenState extends State<AppSplashScreen>
                                           gradient: LinearGradient(
                                             colors: [
                                               Colors.white.withValues(alpha: 0.0),
-                                              Colors.white.withValues(alpha: 0.22),
+                                              Colors.white.withValues(alpha: 0.24),
                                               Colors.white.withValues(alpha: 0.0),
                                             ],
                                           ),
