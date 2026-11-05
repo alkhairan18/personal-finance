@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:personal_finance/app/providers/app_providers.dart';
 import 'package:personal_finance/app/theme/swiss_ledger_theme.dart';
+import 'package:personal_finance/core/database/app_database.dart';
 import 'package:personal_finance/features/dashboard/presentation/buku_kas_screen.dart';
 import 'package:personal_finance/features/debts/presentation/kewajiban_screen.dart';
 import 'package:personal_finance/features/reports/presentation/reports_and_more_screen.dart';
@@ -28,6 +31,13 @@ class MainShellScreen extends ConsumerStatefulWidget {
 
 class _MainShellScreenState extends ConsumerState<MainShellScreen>
     with WidgetsBindingObserver {
+  AppDatabase? _observedDb;
+  int _lastSeenOutboxRevision = 0;
+  Timer? _debounceSyncTimer;
+  Timer? _periodicRetryTimer;
+  bool _hasQueuedFollowUpSync = false;
+  bool _pendingDataInputNotification = false;
+
   bool get _shouldAutoSync =>
       widget.enableAutoSync ??
       !WidgetsBinding.instance.runtimeType.toString().contains('Test');
@@ -42,13 +52,62 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen>
           _triggerSync(silent: true);
         }
       });
+      _periodicRetryTimer = Timer.periodic(
+        const Duration(seconds: 45),
+        (_) => _retryIfPendingOutbox(),
+      );
     }
   }
 
   @override
   void dispose() {
+    _debounceSyncTimer?.cancel();
+    _periodicRetryTimer?.cancel();
+    _observedDb?.removeListener(_onDatabaseChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _attachDatabaseListener(AppDatabase? db) {
+    if (identical(_observedDb, db)) return;
+    _observedDb?.removeListener(_onDatabaseChanged);
+    _observedDb = db;
+    if (db != null) {
+      _lastSeenOutboxRevision = db.outboxEnqueueRevision;
+      db.addListener(_onDatabaseChanged);
+    }
+  }
+
+  void _onDatabaseChanged() {
+    final db = _observedDb;
+    if (db == null || !mounted) return;
+    if (db.outboxEnqueueRevision != _lastSeenOutboxRevision) {
+      _lastSeenOutboxRevision = db.outboxEnqueueRevision;
+      if (_shouldAutoSync) {
+        _pendingDataInputNotification = true;
+        _scheduleDebouncedInputSync();
+      }
+    }
+  }
+
+  void _scheduleDebouncedInputSync() {
+    _debounceSyncTimer?.cancel();
+    _debounceSyncTimer = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) {
+        _triggerSync(silent: true);
+      }
+    });
+  }
+
+  Future<void> _retryIfPendingOutbox() async {
+    if (!mounted || !_shouldAutoSync || ref.read(isSyncingProvider)) return;
+    final db = ref.read(activeDatabaseProvider);
+    if (db == null) return;
+    final pendingCount = await db.getPendingOutboxCount();
+    if (pendingCount > 0 && mounted) {
+      _pendingDataInputNotification = true;
+      await _triggerSync(silent: true);
+    }
   }
 
   @override
@@ -57,6 +116,7 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen>
       _triggerSync(silent: true);
     }
   }
+
   int _selectedIndex = 0;
 
   Future<void> _openQuickAddSheet() async {
@@ -69,7 +129,10 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen>
   }
 
   Future<void> _triggerSync({bool silent = false}) async {
-    if (ref.read(isSyncingProvider)) return;
+    if (ref.read(isSyncingProvider)) {
+      _hasQueuedFollowUpSync = true;
+      return;
+    }
     final syncEngine = ref.read(syncEngineProvider);
     if (syncEngine == null) return;
     ref.read(isSyncingProvider.notifier).state = true;
@@ -79,14 +142,18 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen>
       final messenger = ScaffoldMessenger.maybeOf(context);
       if (messenger != null) {
         if (result.success) {
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(
-                'Sinkronisasi selesai (${result.pushedCount} terkirim, ${result.pulledCount} diterima)',
+          final shouldNotifySuccess =
+              !silent || _pendingDataInputNotification || result.pushedCount > 0;
+          _pendingDataInputNotification = false;
+          if (shouldNotifySuccess) {
+            messenger.hideCurrentSnackBar();
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('Data Anda Sudah Diterima'),
+                duration: Duration(seconds: 2),
               ),
-              duration: const Duration(seconds: 2),
-            ),
-          );
+            );
+          }
         } else if (!silent) {
           messenger.showSnackBar(
             SnackBar(
@@ -102,6 +169,10 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen>
     } finally {
       if (mounted) {
         ref.read(isSyncingProvider.notifier).state = false;
+        if (_hasQueuedFollowUpSync) {
+          _hasQueuedFollowUpSync = false;
+          _triggerSync(silent: true);
+        }
       }
     }
   }
@@ -110,6 +181,7 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen>
   Widget build(BuildContext context) {
     final authRepo = ref.watch(authRepositoryProvider);
     final db = ref.watch(activeDatabaseProvider);
+    _attachDatabaseListener(db);
     final isSyncing = ref.watch(isSyncingProvider);
     final session = authRepo.currentSession;
 
@@ -170,7 +242,7 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen>
                         final hasPending = pendingCount > 0;
                         return InkWell(
                           key: const Key('header_sync_status_badge'),
-                          onTap: isSyncing ? null : _triggerSync,
+                          onTap: isSyncing ? null : () => _triggerSync(silent: false),
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
                             padding: const EdgeInsets.symmetric(

@@ -509,6 +509,9 @@ class AppDatabase extends ChangeNotifier {
   final sql.Database _rawDb;
   int _txDepth = 0;
   bool _isClosed = false;
+  int _outboxEnqueueRevision = 0;
+
+  int get outboxEnqueueRevision => _outboxEnqueueRevision;
 
   AppDatabase._({
     required this.userId,
@@ -1141,6 +1144,28 @@ class AppDatabase extends ChangeNotifier {
   }
 
   void enqueueOutbox({
+    required String operationId,
+    required String entityType,
+    required String entityId,
+    required String operationType,
+    int? baseVersion,
+    required Map<String, dynamic> payload,
+  }) {
+    _outboxEnqueueRevision++;
+    _enqueueOutboxInternal(
+      operationId: operationId,
+      entityType: entityType,
+      entityId: entityId,
+      operationType: operationType,
+      baseVersion: baseVersion,
+      payload: payload,
+    );
+    if (_txDepth == 0) {
+      notifyDataChanged();
+    }
+  }
+
+  void _enqueueOutboxInternal({
     required String operationId,
     required String entityType,
     required String entityId,
